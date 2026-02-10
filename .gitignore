@@ -1,0 +1,33 @@
+# --- Laravel Core ---
+/vendor
+/node_modules
+/public/storage
+/public/hot
+/storage/*.key
+/storage/framework/cache/data/
+/storage/framework/sessions/
+/storage/framework/views/
+/storage/logs/
+.phpunit.result.cache
+
+# --- Configuration & Secrets (SANGAT PENTING) ---
+.env
+.env.backup
+.env.production
+auth.json
+Homestead.json
+Homestead.yaml
+
+# --- Editor & OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# --- Specific to your setup ---
+.phpactor.json
+/.fleet
+/.nova
+/.zed
+/public/build
