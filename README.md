@@ -1,59 +1,89 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# 🏦 FEEPAY.ID - Payment Gateway & Digital Product Engine
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Sistem manajemen transaksi top-up otomatis, integrasi PPOB Digiflazz, dan konversi USDT. Dibangun dengan fokus pada keamanan tingkat tinggi, performa antrean (queue), dan kemudahan monitoring via Telegram.
 
-## About Laravel
+---
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## 🛠️ Arsitektur & Teknologi
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+FEEPAY.ID menggunakan arsitektur modern untuk memastikan setiap transaksi diproses secara atomik dan aman.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+* **Framework:** [Laravel 11](https://laravel.com) (Latest Stable)
+* **Database:** MySQL dengan optimasi indexing pada tabel transaksi.
+* **Security:** * **Sanctum Authentication** untuk komunikasi API frontend.
+    * **Route Obfuscation** untuk menyembunyikan endpoint administratif.
+    * **Double-Verification PIN** untuk persetujuan transaksi manual.
+* **Background Processing:** Laravel Queue (Database Driver) untuk menangani webhook dan email.
 
-## Learning Laravel
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+---
 
-## Laravel Sponsors
+## 🔥 Fitur Unggulan
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+### 1. Integrasi Digiflazz (Real-time)
+Otomatisasi penuh mulai dari pengambilan daftar produk, pengecekan saldo, hingga eksekusi orderan. Dilengkapi dengan fitur *retry logic* jika terjadi kegagalan sistem provider.
 
-### Premium Partners
+### 2. Custom Security Layer
+Bukan sekadar `/admin`. Alamat portal admin dikontrol sepenuhnya melalui variabel `.env`:
+- `ADMIN_PATH_PREFIX`: Mengubah pintu masuk API agar bot scraper tidak bisa menemukan celah login.
+- `ADMIN_PIN`: Keamanan lapis kedua sebelum sistem melakukan *broadcast* atau persetujuan dana keluar.
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+### 3. Telegram Command Center
+Integrasi dua arah dengan Bot Telegram:
+- **Notification:** Update real-time transaksi masuk, stok menipis, dan laporan harian.
+- **Alerting:** Notifikasi instan jika terjadi error kritis pada server.
 
-## Contributing
+---
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+## 📂 Struktur Endpoint (API)
 
-## Code of Conduct
+| Method | Endpoint | Fungsi | Akses |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/products` | List semua produk aktif | Public |
+| `POST` | `/api/checkout` | Pembuatan invoice transaksi | Public |
+| `POST` | `/api/{prefix}/login` | Login Admin (Hidden Path) | Secret |
+| `POST` | `/api/{prefix}/approve` | Konfirmasi transaksi manual | Admin Only |
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+---
 
-## Security Vulnerabilities
+## 🚀 Panduan Instalasi (Development)
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+Pastikan lingkungan lokal Anda memenuhi syarat: **PHP 8.2+**, **Composer**, dan **MySQL**.
 
-## License
+1. **Clone & Install**
+   ```bash
+   git clone [https://github.com/fetrusmeilanoilhamsyah/backend-FEEPAY.ID.git](https://github.com/fetrusmeilanoilhamsyah/backend-FEEPAY.ID.git)
+   cd backend-FEEPAY.ID && composer install
+2.Environment Setup Salin .env.example menjadi .env dan lengkapi konfigurasi berikut:
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+    Database Credentials
+
+    Digiflazz API Key & Username
+
+    Telegram Bot Token & Chat ID
+
+    ADMIN_PATH_PREFIX (Pilih string acak untuk keamanan)
+    
+3.Database Migration
+   php artisan key:generate
+   hp artisan migrate --seed
+   
+4.Service Workers Jalankan worker untuk memproses notifikasi dan transaksi di background:
+  php artisan queue:work
+
+  🛡️ Security Best Practices
+Selalu gunakan APP_DEBUG=false di lingkungan produksi.
+
+Ganti ADMIN_PATH_PREFIX secara berkala jika terindikasi kebocoran URL.
+
+Pastikan folder storage dan bootstrap/cache memiliki izin akses yang tepat.
+
+📞 Hubungi Pengembang
+Punya saran fitur atau menemukan bug? Hubungi saya melalui jalur resmi:
+
+Developer: Fetrus Meilano Ilhamsyah
+
+Telegram: @FEE999888
+
+Email: fetrusmeilanoilham@gmail.com
