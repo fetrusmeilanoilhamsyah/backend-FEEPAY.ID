@@ -66,11 +66,14 @@ Pastikan lingkungan lokal Anda memenuhi syarat: **PHP 8.2+**, **Composer**, dan 
     ADMIN_PATH_PREFIX (Pilih string acak untuk keamanan)
     
 3.Database Migration
-   php artisan key:generate
-   hp artisan migrate --seed
+
+    php artisan key:generate
    
-4.Service Workers Jalankan worker untuk memproses notifikasi dan transaksi di background:
-  php artisan queue:work
+    hp artisan migrate --seed
+   
+4.Service Workers Jalankan worker untuk memproses notifikasi dan transaksi di background: 
+
+    php artisan queue:work
 
   🛡️ Security Best Practices
 Selalu gunakan APP_DEBUG=false di lingkungan produksi.
