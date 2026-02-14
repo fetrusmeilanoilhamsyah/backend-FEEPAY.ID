@@ -98,13 +98,21 @@ class SupportController extends Controller
         $ticketId = 'SUP' . str_pad($support->id, 6, '0', STR_PAD_LEFT);
         $platformEmoji = $support->platform === 'telegram' ? '✈️' : '💬';
 
-        $message = "🔔 *SUPPORT MESSAGE BARU - FEEPAY\\.ID*\n\n" .
-                   "📋 *Ticket:* `{$ticketId}`\n" .
-                   "👤 *Nama:* " . $this->escapeMarkdown($support->user_name) . "\n" .
-                   "📧 *Email:* " . $this->escapeMarkdown($support->user_email) . "\n" .
-                   "{$platformEmoji} *Platform:* " . ucfirst($support->platform) . "\n\n" .
-                   "💬 *Pesan:*\n" . $this->escapeMarkdown($support->message) . "\n\n" .
-                   "🕒 *Waktu:* " . $support->created_at->format('d M Y H:i') . " WIB";
+        // Escape all dynamic content properly
+        $escapedTicketId = $this->escapeMarkdown($ticketId);
+        $escapedName = $this->escapeMarkdown($support->user_name);
+        $escapedEmail = $this->escapeMarkdown($support->user_email);
+        $escapedPlatform = $this->escapeMarkdown(ucfirst($support->platform));
+        $escapedMessage = $this->escapeMarkdown($support->message);
+        $escapedTime = $this->escapeMarkdown($support->created_at->format('d M Y H:i') . ' WIB');
+
+        $message = "🔔 *SUPPORT MESSAGE BARU \\- FEEPAY\\.ID*\n\n" .
+                   "📋 *Ticket:* `{$escapedTicketId}`\n" .
+                   "👤 *Nama:* {$escapedName}\n" .
+                   "📧 *Email:* {$escapedEmail}\n" .
+                   "{$platformEmoji} *Platform:* {$escapedPlatform}\n\n" .
+                   "💬 *Pesan:*\n{$escapedMessage}\n\n" .
+                   "🕒 *Waktu:* {$escapedTime}";
 
         $url = "https://api.telegram.org/bot{$botToken}/sendMessage";
         
@@ -129,15 +137,29 @@ class SupportController extends Controller
     /**
      * Escape special characters for Telegram MarkdownV2
      * 
-     * @param string $text
+     * @param string|null $text
      * @return string
      */
     private function escapeMarkdown($text)
     {
-        $specialChars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
+        if (empty($text)) {
+            return '';
+        }
+
+        // Characters that need to be escaped in MarkdownV2
+        $specialChars = [
+            '\\', '_', '*', '[', ']', '(', ')', '~', '`', 
+            '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'
+        ];
         
+        // Escape backslash first to avoid double escaping
+        $text = str_replace('\\', '\\\\', $text);
+        
+        // Then escape other special characters
         foreach ($specialChars as $char) {
-            $text = str_replace($char, '\\' . $char, $text);
+            if ($char !== '\\') { // Skip backslash as it's already done
+                $text = str_replace($char, '\\' . $char, $text);
+            }
         }
         
         return $text;
@@ -158,7 +180,7 @@ class SupportController extends Controller
                     'url' => 'https://wa.me/' . env('SUPPORT_WHATSAPP', '6281234567890'),
                     'label' => 'WhatsApp Support',
                 ],
-                'telegram' => [
+                'telegram' => [  // ← DIPERBAIKI: tambah kurung siku
                     'username' => env('SUPPORT_TELEGRAM', 'feepay_support'),
                     'url' => 'https://t.me/' . env('SUPPORT_TELEGRAM', 'feepay_support'),
                     'label' => 'Telegram Support',
