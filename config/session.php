@@ -214,4 +214,9 @@ return [
 
     'partitioned' => env('SESSION_PARTITIONED_COOKIE', false),
 
+    'secure' => env('SESSION_SECURE_COOKIE', true),  // ✅ true di production
+    'http_only' => true,
+    'same_site' => 'lax',
+
+
 ];

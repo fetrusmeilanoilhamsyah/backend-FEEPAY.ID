@@ -2,385 +2,189 @@
 
 namespace App\Services;
 
-use App\Models\Payment;
-use App\Models\Transaction;
+use Midtrans\Config;
+use Midtrans\Snap;
+use Midtrans\Notification;
+use Exception;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 
 class MidtransService
 {
-    protected string $serverKey;
-    protected string $clientKey;
-    protected bool   $isProduction;
-    protected string $snapUrl;
-    protected string $apiUrl;
-
     public function __construct()
     {
-        $this->serverKey    = config('midtrans.server_key');
-        $this->clientKey    = config('midtrans.client_key');
-        $this->isProduction = config('midtrans.is_production', false);
-
-        $this->snapUrl = $this->isProduction
-            ? 'https://app.midtrans.com/snap/v1/transactions'
-            : 'https://app.sandbox.midtrans.com/snap/v1/transactions';
-
-        $this->apiUrl = $this->isProduction
-            ? 'https://api.midtrans.com/v2'
-            : 'https://api.sandbox.midtrans.com/v2';
+        // Set konfigurasi Midtrans
+        Config::$serverKey = config('services.midtrans.server_key');
+        Config::$isProduction = config('services.midtrans.is_production');
+        Config::$isSanitized = config('services.midtrans.is_sanitized');
+        Config::$is3ds = config('services.midtrans.is_3ds');
     }
 
-    // ─────────────────────────────────────────────────────────
-    // 1. BUAT SNAP TOKEN (Dipanggil saat user checkout)
-    // ─────────────────────────────────────────────────────────
-
     /**
-     * Buat Snap Token dari Midtrans dan simpan ke tabel payments.
+     * Create Snap Token untuk pembayaran
+     * SECURITY: Amount diambil dari database, bukan dari user input
      *
-     * @param  Transaction  $transaction  Data transaksi dari tabel lama
-     * @return Payment
-     * @throws \Exception
+     * @param string $orderId
+     * @param int $amount - Harga dari database (dalam Rupiah)
+     * @param string $customerEmail
+     * @param string $productName
+     * @return string Snap Token
+     * @throws Exception
      */
-    public function createSnapToken(Transaction $transaction): Payment
-    {
-        $orderId = 'FEEPAY-' . strtoupper(Str::random(8)) . '-' . time();
+    public function createSnapToken(
+        string $orderId,
+        int $amount,
+        string $customerEmail,
+        string $productName
+    ): string {
+        try {
+            // Validasi amount harus positif
+            if ($amount <= 0) {
+                throw new Exception("Invalid amount: must be greater than 0");
+            }
 
-        $params = [
-            'transaction_details' => [
-                'order_id'     => $orderId,
-                'gross_amount' => (int) $transaction->amount, // Midtrans wajib integer
-            ],
-            'customer_details' => [
-                'first_name' => $transaction->customer_name ?? 'Customer',
-                'email'      => $transaction->customer_email ?? '',
-                'phone'      => $transaction->customer_phone ?? '',
-            ],
-            'item_details' => [
-                [
-                    'id'       => $transaction->product_code ?? 'PROD-001',
-                    'price'    => (int) $transaction->amount,
-                    'quantity' => 1,
-                    'name'     => $transaction->product_name ?? 'Produk Digital FEEPAY',
+            // Parameter untuk Midtrans Snap
+            $params = [
+                'transaction_details' => [
+                    'order_id' => $orderId,
+                    'gross_amount' => $amount, // Amount dari database
                 ],
-            ],
-            // Aktifkan metode bayar yang diinginkan
-            'enabled_payments' => [
-                'bca_va',
-                'bni_va',
-                'bri_va',
-                'permata_va',
-                'other_va',
-                'gopay',
-                'qris',
-                'dana',
-                'ovo',
-            ],
-            // Konfigurasi Snap
-            'credit_card' => [
-                'secure' => true,
-            ],
-            // Waktu expired: 24 jam
-            'expiry' => [
-                'unit'     => 'hours',
-                'duration' => 24,
-            ],
-        ];
+                'item_details' => [
+                    [
+                        'id' => $orderId,
+                        'price' => $amount,
+                        'quantity' => 1,
+                        'name' => $productName,
+                    ]
+                ],
+                'customer_details' => [
+                    'email' => $customerEmail,
+                ],
+                'enabled_payments' => [
+                    'credit_card',
+                    'bca_va',
+                    'bni_va',
+                    'bri_va',
+                    'permata_va',
+                    'other_va',
+                    'gopay',
+                    'shopeepay',
+                    'qris',
+                ],
+                'callbacks' => [
+                    'finish' => config('app.url') . '/payment/finish',
+                ],
+                'expiry' => [
+                    'start_time' => date('Y-m-d H:i:s O'),
+                    'unit' => 'minutes',
+                    'duration' => 60, // 1 jam
+                ],
+            ];
 
-        $response = $this->callSnapApi($params);
+            // Generate Snap Token
+            $snapToken = Snap::getSnapToken($params);
 
-        // Simpan ke tabel payments
-        $payment = Payment::create([
-            'order_id'        => $orderId,
-            'transaction_id'  => $transaction->id,
-            'snap_token'      => $response['token'],
-            'payment_url'     => $response['redirect_url'],
-            'gross_amount'    => $transaction->amount,
-            'status'          => 'pending',
-            'customer_name'   => $transaction->customer_name,
-            'customer_email'  => $transaction->customer_email,
-            'customer_phone'  => $transaction->customer_phone,
-            'expired_at'      => now()->addHours(24),
-            'midtrans_response' => $response,
-        ]);
-
-        Log::info('[Midtrans] Snap token dibuat', [
-            'order_id'   => $orderId,
-            'payment_id' => $payment->id,
-        ]);
-
-        return $payment;
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // 2. HANDLE WEBHOOK (Dipanggil oleh Midtrans otomatis)
-    // ─────────────────────────────────────────────────────────
-
-    /**
-     * Proses notifikasi webhook dari Midtrans.
-     * Midtrans akan POST ke /api/midtrans/webhook setiap ada update status.
-     *
-     * @param  array  $payload  Data dari request webhook
-     * @return Payment|null
-     */
-    public function handleWebhook(array $payload): ?Payment
-    {
-        // Verifikasi signature keamanan
-        if (! $this->verifySignature($payload)) {
-            Log::warning('[Midtrans] Signature webhook tidak valid', $payload);
-            return null;
-        }
-
-        $orderId = $payload['order_id'] ?? null;
-        if (! $orderId) {
-            Log::warning('[Midtrans] order_id tidak ada di webhook');
-            return null;
-        }
-
-        $payment = Payment::where('order_id', $orderId)->first();
-        if (! $payment) {
-            Log::warning('[Midtrans] Payment tidak ditemukan', ['order_id' => $orderId]);
-            return null;
-        }
-
-        // Jangan proses ulang jika sudah settlement/capture
-        if ($payment->isPaid()) {
-            Log::info('[Midtrans] Payment sudah terbayar, skip', ['order_id' => $orderId]);
-            return $payment;
-        }
-
-        $newStatus   = $this->mapStatus($payload);
-        $paymentType = $payload['payment_type'] ?? null;
-
-        $updateData = [
-            'status'           => $newStatus,
-            'payment_type'     => $paymentType,
-            'webhook_payload'  => $payload,
-        ];
-
-        // Ambil detail VA / QR Code sesuai metode bayar
-        $updateData = array_merge($updateData, $this->extractPaymentDetail($payload, $paymentType));
-
-        // Tandai waktu bayar jika berhasil
-        if (in_array($newStatus, ['settlement', 'capture'])) {
-            $updateData['paid_at'] = now();
-        }
-
-        $payment->update($updateData);
-
-        Log::info('[Midtrans] Status payment diupdate', [
-            'order_id'  => $orderId,
-            'old_status' => $payment->getOriginal('status'),
-            'new_status' => $newStatus,
-        ]);
-
-        // Trigger event jika payment berhasil
-        if ($payment->isPaid()) {
-            $this->onPaymentSuccess($payment);
-        }
-
-        return $payment->fresh();
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // 3. CEK STATUS (Manual check via API Midtrans)
-    // ─────────────────────────────────────────────────────────
-
-    /**
-     * Cek status transaksi langsung ke API Midtrans.
-     * Berguna untuk polling atau fallback jika webhook tidak masuk.
-     */
-    public function checkStatus(string $orderId): array
-    {
-        $url = "{$this->apiUrl}/{$orderId}/status";
-
-        $response = $this->callApi('GET', $url);
-
-        Log::info('[Midtrans] Status check', [
-            'order_id'            => $orderId,
-            'transaction_status'  => $response['transaction_status'] ?? 'unknown',
-        ]);
-
-        return $response;
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // PRIVATE HELPERS
-    // ─────────────────────────────────────────────────────────
-
-    /**
-     * Panggil Snap API untuk mendapatkan token
-     */
-    private function callSnapApi(array $params): array
-    {
-        $response = $this->callApi('POST', $this->snapUrl, $params);
-
-        if (empty($response['token'])) {
-            throw new \Exception('[Midtrans] Gagal mendapatkan snap token: ' . json_encode($response));
-        }
-
-        return $response;
-    }
-
-    /**
-     * HTTP client ke Midtrans API
-     */
-    private function callApi(string $method, string $url, array $data = []): array
-    {
-        $ch = curl_init();
-
-        curl_setopt_array($ch, [
-            CURLOPT_URL            => $url,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER     => [
-                'Content-Type: application/json',
-                'Accept: application/json',
-                'Authorization: Basic ' . base64_encode($this->serverKey . ':'),
-            ],
-        ]);
-
-        if ($method === 'POST') {
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
-        }
-
-        $result   = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error    = curl_error($ch);
-        curl_close($ch);
-
-        if ($error) {
-            throw new \Exception('[Midtrans] cURL Error: ' . $error);
-        }
-
-        $decoded = json_decode($result, true);
-
-        if ($httpCode >= 400) {
-            Log::error('[Midtrans] API Error', [
-                'http_code' => $httpCode,
-                'response'  => $decoded,
+            Log::info('Snap token created', [
+                'order_id' => $orderId,
+                'amount' => $amount,
             ]);
-            throw new \Exception('[Midtrans] API Error HTTP ' . $httpCode . ': ' . $result);
+
+            return $snapToken;
+
+        } catch (Exception $e) {
+            Log::error('Failed to create snap token', [
+                'order_id' => $orderId,
+                'error' => $e->getMessage(),
+            ]);
+            throw new Exception('Failed to create payment token: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Verify Signature Key dari Midtrans Notification
+     * SECURITY: Mencegah webhook palsu dengan validasi signature
+     *
+     * @param array $notificationData
+     * @return bool
+     */
+    public function verifySignature(array $notificationData): bool
+    {
+        try {
+            $orderId = $notificationData['order_id'] ?? null;
+            $statusCode = $notificationData['status_code'] ?? null;
+            $grossAmount = $notificationData['gross_amount'] ?? null;
+            $serverKey = config('services.midtrans.server_key');
+            $receivedSignature = $notificationData['signature_key'] ?? null;
+
+            if (!$orderId || !$statusCode || !$grossAmount || !$receivedSignature) {
+                Log::warning('Missing required fields for signature verification', [
+                    'notification_data' => $notificationData,
+                ]);
+                return false;
+            }
+
+            // Generate expected signature
+            $expectedSignature = hash('sha512', $orderId . $statusCode . $grossAmount . $serverKey);
+
+            // Compare signatures
+            $isValid = hash_equals($expectedSignature, $receivedSignature);
+
+            if (!$isValid) {
+                Log::warning('Invalid signature detected', [
+                    'order_id' => $orderId,
+                    'expected' => $expectedSignature,
+                    'received' => $receivedSignature,
+                ]);
+            }
+
+            return $isValid;
+
+        } catch (Exception $e) {
+            Log::error('Signature verification failed', [
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Get notification data dari Midtrans
+     *
+     * @return Notification
+     */
+    public function getNotification(): Notification
+    {
+        return new Notification();
+    }
+
+    /**
+     * Map Midtrans transaction status ke internal order status
+     *
+     * @param string $transactionStatus
+     * @param string $fraudStatus
+     * @return string
+     */
+    public function mapTransactionStatus(string $transactionStatus, string $fraudStatus = 'accept'): string
+    {
+        // Status Midtrans: capture, settlement, pending, deny, expire, cancel
+        if ($transactionStatus == 'capture') {
+            if ($fraudStatus == 'accept') {
+                return 'processing'; // Payment captured & verified
+            }
+            return 'pending'; // Fraud detection pending
         }
 
-        return $decoded ?? [];
-    }
-
-    /**
-     * Verifikasi signature dari Midtrans webhook
-     * Formula: SHA512(order_id + status_code + gross_amount + server_key)
-     */
-    private function verifySignature(array $payload): bool
-    {
-        $orderId     = $payload['order_id'] ?? '';
-        $statusCode  = $payload['status_code'] ?? '';
-        $grossAmount = $payload['gross_amount'] ?? '';
-
-        $signature = hash('sha512', $orderId . $statusCode . $grossAmount . $this->serverKey);
-
-        return $signature === ($payload['signature_key'] ?? '');
-    }
-
-    /**
-     * Map status Midtrans ke status internal
-     */
-    private function mapStatus(array $payload): string
-    {
-        $transactionStatus = $payload['transaction_status'] ?? '';
-        $fraudStatus       = $payload['fraud_status'] ?? '';
-
-        return match (true) {
-            $transactionStatus === 'capture' && $fraudStatus === 'accept' => 'capture',
-            $transactionStatus === 'capture' && $fraudStatus === 'challenge' => 'pending',
-            $transactionStatus === 'settlement' => 'settlement',
-            $transactionStatus === 'deny'       => 'deny',
-            $transactionStatus === 'cancel'     => 'cancel',
-            $transactionStatus === 'expire'     => 'expire',
-            $transactionStatus === 'failure'    => 'failure',
-            default                             => 'pending',
-        };
-    }
-
-    /**
-     * Ekstrak detail pembayaran (VA number, QR code, dll)
-     */
-    private function extractPaymentDetail(array $payload, ?string $paymentType): array
-    {
-        $detail = [];
-
-        switch ($paymentType) {
-            case 'bank_transfer':
-                $vaNumbers = $payload['va_numbers'] ?? [];
-                if (! empty($vaNumbers[0])) {
-                    $detail['bank']      = $vaNumbers[0]['bank'] ?? null;
-                    $detail['va_number'] = $vaNumbers[0]['va_number'] ?? null;
-                }
-                // Mandiri Bill
-                if (! empty($payload['biller_code'])) {
-                    $detail['bank']      = 'mandiri';
-                    $detail['va_number'] = $payload['biller_code'] . $payload['bill_key'];
-                }
-                break;
-
-            case 'gopay':
-                $actions = $payload['actions'] ?? [];
-                foreach ($actions as $action) {
-                    if ($action['name'] === 'generate-qr-code') {
-                        $detail['qr_code_url'] = $action['url'];
-                    }
-                    if ($action['name'] === 'deeplink-redirect') {
-                        $detail['deeplink_url'] = $action['url'];
-                    }
-                }
-                break;
-
-            case 'qris':
-                $detail['qr_code_url'] = $payload['qr_code_url'] ?? null;
-                break;
+        if ($transactionStatus == 'settlement') {
+            return 'processing'; // Payment sukses, siap diproses ke Digiflazz
         }
 
-        return $detail;
-    }
-
-    /**
-     * Aksi setelah payment berhasil:
-     * Update status transaksi, kirim notifikasi Telegram, dll
-     */
-    private function onPaymentSuccess(Payment $payment): void
-    {
-        // Update status di tabel transactions lama
-        if ($payment->transaction) {
-            $payment->transaction->update(['status' => 'paid']);
+        if ($transactionStatus == 'pending') {
+            return 'pending'; // Waiting for payment
         }
 
-        // Dispatch job untuk kirim notifikasi (Telegram, email, dll)
-        // Uncomment setelah job dibuat:
-        // SendPaymentNotification::dispatch($payment);
+        if (in_array($transactionStatus, ['deny', 'expire', 'cancel'])) {
+            return 'failed'; // Payment failed
+        }
 
-        Log::info('[Midtrans] ✅ Payment BERHASIL', [
-            'order_id'     => $payment->order_id,
-            'amount'       => $payment->gross_amount,
-            'payment_type' => $payment->payment_type,
-        ]);
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // GETTER untuk Frontend
-    // ─────────────────────────────────────────────────────────
-
-    public function getClientKey(): string
-    {
-        return $this->clientKey;
-    }
-
-    public function isProduction(): bool
-    {
-        return $this->isProduction;
-    }
-
-    public function getSnapJsUrl(): string
-    {
-        return $this->isProduction
-            ? 'https://app.midtrans.com/snap/snap.js'
-            : 'https://app.sandbox.midtrans.com/snap/snap.js';
+        return 'pending'; // Default
     }
 }

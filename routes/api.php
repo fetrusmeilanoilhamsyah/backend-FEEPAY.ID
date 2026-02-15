@@ -3,21 +3,16 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\OrderController;
+use App\Http\Controllers\Api\PaymentController;
+use App\Http\Controllers\Api\MidtransPaymentController;
+use App\Http\Controllers\Api\CallbackController;
 use App\Http\Controllers\Api\UsdtExchangeController;
 use App\Http\Controllers\Api\ProductController;
-use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\UsdtRateController;
 use App\Http\Controllers\Api\DashboardController;
-use App\Http\Controllers\Api\CallbackController;
 use App\Http\Controllers\Api\SupportController;
 
-/*
-|--------------------------------------------------------------------------
-| API Routes - FEEPAY.ID
-|--------------------------------------------------------------------------
-*/
-
-// Health check
+// Health check - no rate limit
 Route::get('/health', function () {
     return response()->json([
         'success' => true,
@@ -29,40 +24,41 @@ Route::get('/health', function () {
 
 /*
 |--------------------------------------------------------------------------
-| PUBLIC ROUTES (Guest Access)
+| RATE LIMITED PUBLIC ROUTES
 |--------------------------------------------------------------------------
 */
 
-// Support / Customer Service Routes
-Route::middleware('throttle:5,1')->post('/support/send', [SupportController::class, 'send']);
-Route::get('/support/contacts', [SupportController::class, 'getContacts']);
-
-// Products
-Route::prefix('products')->group(function () {
-    Route::get('/', [ProductController::class, 'index']);
+// ✅ Admin Login - STRICT rate limit (5 attempts per minute)
+Route::middleware('throttle:5,1')->group(function () {
+    Route::post('/admin/login', [AuthController::class, 'login']);
 });
 
-// Orders
-Route::prefix('orders')->group(function () {
-    Route::post('/create', [OrderController::class, 'store']);
-    Route::get('/{orderId}', [OrderController::class, 'show']);
+// ✅ Support - Existing rate limit (5 per minute)
+Route::middleware('throttle:5,1')->group(function () {
+    Route::post('/support/send', [SupportController::class, 'send']);
 });
 
-// Payments
-Route::prefix('payments')->group(function () {
-    Route::post('/submit', [PaymentController::class, 'submit']);
+// ✅ Moderate rate limit (20 per minute) - User actions
+Route::middleware('throttle:20,1')->group(function () {
+    Route::post('/orders/create', [OrderController::class, 'store']);
+    Route::post('/payments/submit', [PaymentController::class, 'submit']);
+    Route::post('/payments/midtrans/create', [MidtransPaymentController::class, 'createPayment']);
+    Route::post('/usdt/submit', [UsdtExchangeController::class, 'submit']);
 });
 
-// USDT Exchange
-Route::prefix('usdt')->group(function () {
-    Route::get('/rate', [UsdtRateController::class, 'getCurrent']);
-    Route::post('/submit', [UsdtExchangeController::class, 'submit']);
-    Route::get('/{trxId}', [UsdtExchangeController::class, 'show']);
+// ✅ Webhooks - Permissive but protected (100 per minute)
+Route::middleware('throttle:100,1')->group(function () {
+    Route::post('/callback/digiflazz', [CallbackController::class, 'digiflazz']);
+    Route::post('/callback/midtrans', [MidtransPaymentController::class, 'handleNotification']);
 });
 
-// Callbacks (Webhooks)
-Route::prefix('callback')->group(function () {
-    Route::post('/digiflazz', [CallbackController::class, 'digiflazz']);
+// ✅ Read-only endpoints - Liberal rate limit (60 per minute)
+Route::middleware('throttle:60,1')->group(function () {
+    Route::get('/products', [ProductController::class, 'index']);
+    Route::get('/orders/{orderId}', [OrderController::class, 'show']);
+    Route::get('/usdt/rate', [UsdtRateController::class, 'getCurrent']);
+    Route::get('/usdt/{trxId}', [UsdtExchangeController::class, 'show']);
+    Route::get('/support/contacts', [SupportController::class, 'getContacts']);
 });
 
 /*
@@ -72,7 +68,7 @@ Route::prefix('callback')->group(function () {
 */
 
 Route::prefix('admin')->group(function () {
-    Route::post('/login', [AuthController::class, 'login']);
+    // Login sudah di-rate limit di atas
     
     // Protected admin auth routes
     Route::middleware('auth:sanctum')->group(function () {
@@ -83,7 +79,7 @@ Route::prefix('admin')->group(function () {
 
 /*
 |--------------------------------------------------------------------------
-| PROTECTED ADMIN ROUTES (Sanctum + PIN Middleware)
+| PROTECTED ADMIN ROUTES
 |--------------------------------------------------------------------------
 */
 
@@ -108,8 +104,9 @@ Route::prefix('admin/x7k2m')
         Route::prefix('payments')->group(function () {
             Route::get('/', [PaymentController::class, 'index']);
             Route::post('/{id}/verify', [PaymentController::class, 'verify']);
+            Route::get('/{id}/proof', [PaymentController::class, 'downloadProof']);
         });
-
+        
         // USDT Exchange Management
         Route::prefix('usdt')->group(function () {
             Route::get('/', [UsdtExchangeController::class, 'index']);

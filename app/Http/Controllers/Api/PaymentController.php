@@ -73,18 +73,53 @@ class PaymentController extends Controller
                         'confirmed_at' => now(),
                     ]);
 
-                    // FIX: Pakai konstanta Enum PROCESSING (Huruf Besar)
-                    $order->logStatusChange(OrderStatus::PROCESSING, 'Auto-processed after payment verified', $request->user()->id);
+                    // Log status change
+                    $order->logStatusChange(
+                        OrderStatus::PROCESSING, 
+                        'Auto-processed after payment verified', 
+                        $request->user()->id
+                    );
+                    
+                    // ✅ SECURITY: Log admin action
+                    Log::info('Payment verified and order processed', [
+                        'payment_id' => $payment->payment_id,
+                        'order_id' => $order->order_id,
+                        'admin_id' => $request->user()->id,
+                        'digiflazz_sn' => $apiData['sn'] ?? '-',
+                    ]);
                 } else {
                     // Jika GAGAL (Saldo habis, dll)
                     $order->update(['status' => 'failed']);
-                    $order->logStatusChange(OrderStatus::FAILED, 'Digiflazz Error: ' . $digiflazzResponse['message'], $request->user()->id);
+                    $order->logStatusChange(
+                        OrderStatus::FAILED, 
+                        'Digiflazz Error: ' . $digiflazzResponse['message'], 
+                        $request->user()->id
+                    );
                     $finalMessage = "Verified but Digiflazz Failed: " . $digiflazzResponse['message'];
+                    
+                    // ✅ SECURITY: Log failure
+                    Log::error('Digiflazz processing failed after payment verification', [
+                        'payment_id' => $payment->payment_id,
+                        'order_id' => $order->order_id,
+                        'error' => $digiflazzResponse['message'],
+                    ]);
                 }
             } else {
                 // Jika REJECTED oleh Admin
                 $order->update(['status' => 'failed']);
-                $order->logStatusChange(OrderStatus::FAILED, 'Payment rejected by admin', $request->user()->id);
+                $order->logStatusChange(
+                    OrderStatus::FAILED, 
+                    'Payment rejected by admin', 
+                    $request->user()->id
+                );
+                
+                // ✅ SECURITY: Log rejection
+                Log::info('Payment rejected by admin', [
+                    'payment_id' => $payment->payment_id,
+                    'order_id' => $order->order_id,
+                    'admin_id' => $request->user()->id,
+                    'reason' => $request->admin_note,
+                ]);
             }
 
             DB::commit();
@@ -101,7 +136,13 @@ class PaymentController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Verification failed: ' . $e->getMessage());
+            
+            Log::error('Payment verification failed', [
+                'payment_id' => $id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            
             return response()->json([
                 'success' => false, 
                 'message' => 'System Error: ' . $e->getMessage()
@@ -141,28 +182,79 @@ class PaymentController extends Controller
 
             return response()->json(['success' => true, 'data' => $payments]);
         } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            Log::error('Failed to fetch payments', [
+                'error' => $e->getMessage(),
+            ]);
+            
+            return response()->json([
+                'success' => false, 
+                'message' => $e->getMessage()
+            ], 500);
         }
     }
 
     /**
      * Submit payment proof (User)
+     * ✅ SECURITY IMPROVEMENTS:
+     * - Strict file validation (mimes, size)
+     * - Random filename (prevent directory traversal)
+     * - Private storage (not public accessible)
+     * - Enhanced logging
      */
     public function submit(StorePaymentRequest $request)
     {
         try {
+            // ✅ SECURITY: Additional file validation
+            $request->validate([
+                'order_id' => 'required|string|exists:orders,order_id',
+                'type' => 'required|string|in:bank_transfer,qris',
+                'amount' => 'required|numeric|min:1',
+                'proof' => [
+                    'required',
+                    'file',
+                    'mimes:jpg,jpeg,png,pdf',  // ✅ Whitelist only safe formats
+                    'max:5120',  // ✅ 5MB max
+                ],
+            ]);
+            
             DB::beginTransaction();
 
             $order = Order::where('order_id', $request->order_id)->first();
+            
             if (!$order || $order->payment_id) {
-                return response()->json(['success' => false, 'message' => 'Invalid order or payment exists'], 400);
+                // ✅ SECURITY: Log suspicious activity
+                Log::warning('Invalid payment submission attempt', [
+                    'order_id' => $request->order_id,
+                    'ip' => $request->ip(),
+                    'reason' => !$order ? 'order_not_found' : 'payment_exists',
+                ]);
+                
+                return response()->json([
+                    'success' => false, 
+                    'message' => 'Invalid order or payment exists'
+                ], 400);
             }
 
             $proofPath = null;
             if ($request->hasFile('proof')) {
                 $file = $request->file('proof');
-                $filename = 'proof_' . time() . '_' . Str::random(5) . '.' . $file->getClientOriginalExtension();
-                $proofPath = $file->storeAs('payment_proofs', $filename, 'public');
+                
+                // ✅ SECURITY: Generate completely random filename
+                // JANGAN pakai time() atau filename asli untuk avoid predictability
+                $filename = Str::random(40) . '.' . $file->extension();
+                
+                // ✅ SECURITY: Store di PRIVATE disk (bukan public!)
+                // File tidak bisa diakses langsung via URL
+                $proofPath = $file->storeAs('payment_proofs', $filename, 'private');
+                
+                // ✅ SECURITY: Log file upload
+                Log::info('Payment proof uploaded', [
+                    'order_id' => $request->order_id,
+                    'filename' => $filename,
+                    'size' => $file->getSize(),
+                    'mime' => $file->getMimeType(),
+                    'ip' => $request->ip(),
+                ]);
             }
 
             $payment = Payment::create([
@@ -176,10 +268,99 @@ class PaymentController extends Controller
             $order->update(['payment_id' => $payment->id]);
 
             DB::commit();
-            return response()->json(['success' => true, 'message' => 'Success'], 201);
+            
+            // ✅ SECURITY: Log successful submission
+            Log::info('Payment submitted successfully', [
+                'payment_id' => $payment->payment_id,
+                'order_id' => $order->order_id,
+                'amount' => $request->amount,
+                'type' => $request->type,
+            ]);
+            
+            return response()->json([
+                'success' => true, 
+                'message' => 'Success'
+            ], 201);
+            
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            // ✅ SECURITY: Log validation failures
+            Log::warning('Payment submission validation failed', [
+                'order_id' => $request->order_id,
+                'errors' => $e->errors(),
+                'ip' => $request->ip(),
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation error',
+                'errors' => $e->errors(),
+            ], 422);
+            
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            
+            // ✅ SECURITY: Log errors
+            Log::error('Payment submission failed', [
+                'order_id' => $request->order_id ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            
+            return response()->json([
+                'success' => false, 
+                'message' => 'Failed to submit payment'
+            ], 500);
+        }
+    }
+    
+    /**
+     * ✅ OPTIONAL: Method untuk download payment proof (Admin only)
+     * Karena file disimpan di private storage
+     */
+    public function downloadProof(int $id)
+    {
+        try {
+            $payment = Payment::findOrFail($id);
+            
+            if (!$payment->proof_path) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No proof file found'
+                ], 404);
+            }
+            
+            // Check if file exists
+            if (!Storage::disk('private')->exists($payment->proof_path)) {
+                Log::error('Payment proof file not found', [
+                    'payment_id' => $payment->payment_id,
+                    'path' => $payment->proof_path,
+                ]);
+                
+                return response()->json([
+                    'success' => false,
+                    'message' => 'File not found'
+                ], 404);
+            }
+            
+            // ✅ SECURITY: Log file access
+            Log::info('Payment proof accessed', [
+                'payment_id' => $payment->payment_id,
+                'admin_id' => auth()->id(),
+            ]);
+            
+            // Return file download
+            return Storage::disk('private')->download($payment->proof_path);
+            
+        } catch (\Exception $e) {
+            Log::error('Failed to download payment proof', [
+                'payment_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to download file'
+            ], 500);
         }
     }
 }

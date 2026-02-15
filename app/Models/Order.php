@@ -22,12 +22,22 @@ class Order extends Model
         'payment_id',
         'confirmed_by',
         'confirmed_at',
+        
+        // ✅ TAMBAHAN: Midtrans fields
+        'midtrans_snap_token',
+        'midtrans_transaction_id',
+        'midtrans_payment_type',
+        'midtrans_transaction_status',
+        'midtrans_transaction_time',
     ];
 
     protected $casts = [
         'total_price' => 'decimal:2',
         'status' => OrderStatus::class,
         'confirmed_at' => 'datetime',
+        
+        // ✅ TAMBAHAN: Midtrans casts
+        'midtrans_transaction_time' => 'datetime',
     ];
 
     /**
@@ -107,5 +117,33 @@ class Order extends Model
     {
         $this->logStatusChange(OrderStatus::FAILED, $reason ?? 'Order failed', $userId);
         return $this->update(['status' => OrderStatus::FAILED->value]);
+    }
+
+    // ============================================
+    // ✅ TAMBAHAN: Midtrans Helper Methods
+    // ============================================
+
+    /**
+     * Check if order is paid via Midtrans
+     */
+    public function isPaidViaMidtrans(): bool
+    {
+        return !is_null($this->midtrans_transaction_id);
+    }
+
+    /**
+     * Check if Midtrans payment is settled
+     */
+    public function isMidtransSettled(): bool
+    {
+        return in_array($this->midtrans_transaction_status, ['capture', 'settlement']);
+    }
+
+    /**
+     * Check if order has Midtrans snap token
+     */
+    public function hasMidtransToken(): bool
+    {
+        return !is_null($this->midtrans_snap_token);
     }
 }

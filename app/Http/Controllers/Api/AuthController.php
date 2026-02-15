@@ -8,6 +8,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
 
 class AuthController extends Controller
 {
@@ -16,72 +17,86 @@ class AuthController extends Controller
      * 
      * POST /api/admin/login
      */
-    public function login(AdminLoginRequest $request)
-    {
-        try {
-            // Find user by email
-            $user = User::where('email', $request->email)->first();
+  public function login(Request $request)
+{
+    $validator = Validator::make($request->all(), [
+        'email' => 'required|email',
+        'password' => 'required|string',
+    ]);
 
-            // Check if user exists and password is correct
-            if (!$user || !Hash::check($request->password, $user->password)) {
-                Log::warning('Failed login attempt', [
-                    'email' => $request->email,
-                    'ip' => $request->ip(),
-                ]);
-
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Invalid credentials',
-                ], 401);
-            }
-
-            // Check if user is active
-            if (!$user->is_active) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Account is inactive',
-                ], 403);
-            }
-
-            // Revoke all previous tokens
-            $user->tokens()->delete();
-
-            // Create new token
-            $token = $user->createToken('admin-token')->plainTextToken;
-
-            Log::info('Admin login successful', [
-                'user_id' => $user->id,
-                'email' => $user->email,
-                'ip' => $request->ip(),
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Login successful',
-                'data' => [
-                    'token' => $token,
-                    'user' => [
-                        'id' => $user->id,
-                        'name' => $user->name,
-                        'email' => $user->email,
-                        'role' => $user->role,
-                    ],
-                ],
-            ], 200);
-
-        } catch (\Exception $e) {
-            Log::error('Login error', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Login failed: ' . $e->getMessage(),
-            ], 500);
-        }
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Validation error',
+            'errors' => $validator->errors(),
+        ], 422);
     }
 
+    try {
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user || !Hash::check($request->password, $user->password)) {
+            // ✅ LOG failed login attempts
+            Log::warning('Failed admin login attempt', [
+                'email' => $request->email,
+                'ip' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'timestamp' => now(),
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid credentials',
+            ], 401);
+        }
+
+        if (!$user->is_active) {
+            Log::warning('Inactive account login attempt', [
+                'email' => $request->email,
+                'ip' => $request->ip(),
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Account is inactive',
+            ], 403);
+        }
+
+        $token = $user->createToken('admin-token')->plainTextToken;
+
+        // ✅ LOG successful login
+        Log::info('Admin logged in successfully', [
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'ip' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Login successful',
+            'data' => [
+                'token' => $token,
+                'user' => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'role' => $user->role,
+                ],
+            ],
+        ], 200);
+
+    } catch (\Exception $e) {
+        Log::error('Login error', [
+            'error' => $e->getMessage(),
+            'email' => $request->email,
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Login failed',
+        ], 500);
+    }
+}
     /**
      * Admin logout
      * 
