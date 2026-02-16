@@ -57,13 +57,7 @@ class UsdtConversion extends Model
         return $query->where('status', UsdtConversionStatus::PENDING->value);
     }
 
-    /**
-     * Get the proof URL
+    /* * Method getProofUrlAttribute() dihapus.
+     * File sekarang menggunakan private storage dan diakses melalui endpoint khusus admin.
      */
-    public function getProofUrlAttribute(): ?string
-    {
-        return $this->proof_path 
-            ? asset('storage/' . $this->proof_path) 
-            : null;
-    }
 }

@@ -122,5 +122,26 @@ return [
         'driver' => env('APP_MAINTENANCE_DRIVER', 'file'),
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
+/*
+    |--------------------------------------------------------------------------
+    | Admin Path Prefix
+    |--------------------------------------------------------------------------
+    |
+    | Random string untuk admin panel path. Ganti secara berkala untuk keamanan.
+    |
+    */
 
+    'admin_path' => env('ADMIN_PATH_PREFIX', 'admin'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Admin Allowed IPs
+    |--------------------------------------------------------------------------
+    |
+    | Comma-separated list of IP addresses allowed to access admin panel.
+    | Leave empty to allow all IPs (not recommended for production).
+    |
+    */
+
+    'admin_allowed_ips' => env('ADMIN_ALLOWED_IPS', ''),
 ];

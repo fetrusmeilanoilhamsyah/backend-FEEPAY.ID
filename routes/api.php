@@ -83,8 +83,8 @@ Route::prefix('admin')->group(function () {
 |--------------------------------------------------------------------------
 */
 
-Route::prefix('admin/x7k2m')
-    ->middleware(['auth:sanctum', 'verify.pin'])
+Route::prefix('admin/' . config('app.admin_path'))
+    ->middleware(['admin.ip', 'auth:sanctum', 'verify.pin'])
     ->group(function () {
         
         // Dashboard
@@ -112,13 +112,15 @@ Route::prefix('admin/x7k2m')
             Route::get('/', [UsdtExchangeController::class, 'index']);
             Route::post('/{id}/approve', [UsdtExchangeController::class, 'approve']);
             Route::post('/{id}/reject', [UsdtExchangeController::class, 'reject']);
+            Route::get('/{id}/proof', [UsdtExchangeController::class, 'downloadProof']);
             Route::post('/rate', [UsdtRateController::class, 'update']);
             Route::get('/rate/history', [UsdtRateController::class, 'history']);
         });
 
         // Products Management
-        Route::prefix('products')->group(function () {
-            Route::post('/sync', [ProductController::class, 'sync']);
-            Route::put('/{id}', [ProductController::class, 'update']);
-        });
+Route::prefix('products')->group(function () {
+    Route::post('/sync', [ProductController::class, 'sync']);
+    Route::post('/bulk-margin', [ProductController::class, 'bulkUpdateMargin']); // ← TAMBAH INI
+    Route::put('/{id}', [ProductController::class, 'update']);
+});
     });

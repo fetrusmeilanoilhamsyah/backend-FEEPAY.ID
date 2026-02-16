@@ -43,13 +43,14 @@ class Payment extends Model
 
     /**
      * Get the proof URL
+     * DEPRECATED: Files are now in private storage, use downloadProof endpoint instead
      */
-    public function getProofUrlAttribute(): ?string
-    {
-        return $this->proof_path 
-            ? asset('storage/' . $this->proof_path) 
-            : null;
-    }
+    // public function getProofUrlAttribute(): ?string
+    // {
+    //     return $this->proof_path 
+    //         ? asset('storage/' . $this->proof_path) 
+    //         : null;
+    // }
 
     /**
      * Scope for pending payments

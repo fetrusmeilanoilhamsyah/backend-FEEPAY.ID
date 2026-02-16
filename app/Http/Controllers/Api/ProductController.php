@@ -43,7 +43,7 @@ class ProductController extends Controller
     }
 
     /**
-     * [BARU] Update Product Price (Admin Only)
+     * Update Product Price (Admin Only)
      */
     public function update(Request $request, $id)
     {
@@ -78,6 +78,47 @@ class ProductController extends Controller
     }
 
     /**
+     * Bulk update margin for all products (Admin Only)
+     * POST /api/admin/{path}/products/bulk-margin
+     */
+    public function bulkUpdateMargin(Request $request)
+    {
+        try {
+            $request->validate([
+                'margin' => 'required|numeric|min:0',
+            ]);
+
+            $margin = $request->margin;
+            $updatedCount = 0;
+
+            $products = Product::all();
+
+            foreach ($products as $product) {
+                $product->update([
+                    'selling_price' => $product->cost_price + $margin
+                ]);
+                $updatedCount++;
+            }
+
+            Log::info('Bulk margin updated', [
+                'margin' => $margin,
+                'updated_count' => $updatedCount,
+                'admin_id' => auth()->id(),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Margin Rp " . number_format($margin, 0, ',', '.') . " berhasil diterapkan ke {$updatedCount} produk",
+                'data' => ['updated_count' => $updatedCount, 'margin' => $margin],
+            ], 200);
+
+        } catch (Exception $e) {
+            Log::error('Bulk margin update failed', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
      * Sync products from Digiflazz API (Admin only)
      */
     public function sync(Request $request)
@@ -93,18 +134,14 @@ class ProductController extends Controller
                 ], 400);
             }
 
-            // Margin default 1000 jika tidak ada di config
             $margin = config('feepay.margin', 1000);
             $syncedCount = 0;
 
             foreach ($response['data'] as $item) {
                 $costPrice = $item['price'] ?? 0;
                 
-                // Cek apakah produk sudah ada
                 $existingProduct = Product::where('sku', $item['buyer_sku_code'])->first();
                 
-                // LOGIKA: Jika produk baru, pakai margin. 
-                // Jika produk lama, jangan timpa harga jual (biar harga yang diedit admin gak ilang)
                 $sellingPrice = $existingProduct ? $existingProduct->selling_price : ($costPrice + $margin);
 
                 Product::updateOrCreate(
@@ -128,7 +165,7 @@ class ProductController extends Controller
 
         } catch (Exception $e) {
             Log::error('Product sync failed', ['error' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Failed to sync products'], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 }

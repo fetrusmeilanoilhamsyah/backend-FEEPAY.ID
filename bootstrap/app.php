@@ -19,6 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // Register middleware aliases
         $middleware->alias([
             'verify.pin' => \App\Http\Middleware\VerifyPinMiddleware::class,
+            'admin.ip'   => \App\Http\Middleware\AdminIpWhitelist::class,
         ]);
 
         // API middleware group configuration

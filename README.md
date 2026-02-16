@@ -89,4 +89,123 @@ Developer: Fetrus Meilano Ilhamsyah
 
 Telegram: @FEE999888
 
-Email: fetrusmeilanoilham@gmail.com
+# FEEPAY.ID - Catatan Deployment & Development
+
+## 🖥️ Development (Local) - Terminal yang Dibutuhkan
+
+Buka 5 terminal terpisah:
+
+```bash
+# Terminal 1 - Backend Laravel
+cd backend
+php artisan serve
+
+# Terminal 2 - Frontend Vue
+cd frontend
+npm run dev
+
+# Terminal 3 - Tunnel (opsional, buat expose ke internet)
+ngrok http 8000
+
+# Terminal 4 - Scheduler (auto sync produk tiap 6 jam)
+cd backend
+php artisan schedule:work
+
+# Terminal 5 - Queue Worker (buat kirim email notifikasi)
+cd backend
+php artisan queue:work
+```
+
+---
+
+## 🚀 Production (VPS/Server) - Cukup 1 Cron Job!
+
+### 1. Build Frontend (sekali aja)
+```bash
+cd frontend
+npm run build
+```
+
+### 2. Setup Cron Job (gantiin schedule:work)
+Jalankan `crontab -e` lalu tambahkan:
+```
+* * * * * cd /path/ke/project/backend && php artisan schedule:run >> /dev/null 2>&1
+```
+Ini otomatis sync produk tiap 6 jam. Ga perlu terminal!
+
+### 3. Setup Supervisor (gantiin queue:work)
+Supervisor otomatis jalankan queue worker di background, restart kalau crash.
+
+Install supervisor:
+```bash
+apt install supervisor
+```
+
+Buat config `/etc/supervisor/conf.d/feepay-worker.conf`:
+```ini
+[program:feepay-worker]
+process_name=%(program_name)s_%(process_num)02d
+command=php /path/ke/project/backend/artisan queue:work --sleep=3 --tries=3
+autostart=true
+autorestart=true
+numprocs=1
+redirect_stderr=true
+stdout_logfile=/path/ke/project/backend/storage/logs/worker.log
+```
+
+Lalu jalankan:
+```bash
+supervisorctl reread
+supervisorctl update
+supervisorctl start feepay-worker:*
+```
+
+### 4. Web Server (gantiin php artisan serve)
+Pakai Nginx atau Apache. Tidak perlu `php artisan serve` di production!
+
+---
+
+## 📋 Ringkasan
+
+| Development | Production |
+|-------------|------------|
+| 5 terminal manual | Cukup 1 cron job |
+| `php artisan serve` | Nginx/Apache |
+| `npm run dev` | `npm run build` (sekali) |
+| `php artisan schedule:work` | Cron job |
+| `php artisan queue:work` | Supervisor |
+| `ngrok` | Domain sendiri |
+
+---
+
+## ⚙️ Jadwal Auto-Sync Produk
+- Sync dari Digiflazz tiap **6 jam sekali**
+- Jam: 00.00, 06.00, 12.00, 18.00
+- Harga jual yang sudah diedit admin **tidak akan ditimpa**
+- Test manual: `php artisan app:sync-products`
+
+---
+
+## 🔐 Environment Variables Penting (.env)
+```env
+APP_ENV=production
+APP_DEBUG=false
+APP_KEY=base64:...
+
+ADMIN_PATH_PREFIX=yQIhhAOQ
+ADMIN_ALLOWED_IPS=IP_KAMU_DI_SINI
+
+SANCTUM_TOKEN_EXPIRATION=1440
+
+DIGIFLAZZ_USERNAME=...
+DIGIFLAZZ_API_KEY=...
+
+MAIL_MAILER=smtp
+MAIL_HOST=smtp.gmail.com
+MAIL_PORT=587
+MAIL_USERNAME=email@gmail.com
+MAIL_PASSWORD=app_password_gmail
+MAIL_ENCRYPTION=tls
+MAIL_FROM_ADDRESS=email@gmail.com
+MAIL_FROM_NAME=FEEPAY.ID
+```

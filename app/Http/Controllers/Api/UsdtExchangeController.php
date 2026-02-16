@@ -18,8 +18,7 @@ class UsdtExchangeController extends Controller
 {
     /**
      * Submit USDT exchange request (Public)
-     * 
-     * POST /api/usdt/submit
+     * * POST /api/usdt/submit
      */
     public function submit(StoreUsdtExchangeRequest $request)
     {
@@ -30,8 +29,8 @@ class UsdtExchangeController extends Controller
             $proofPath = null;
             if ($request->hasFile('proof')) {
                 $file = $request->file('proof');
-                $filename = 'usdt_proof_' . time() . '_' . Str::random(10) . '.' . $file->getClientOriginalExtension();
-                $proofPath = $file->storeAs('usdt_proofs', $filename, 'public');
+                $filename = 'usdt_' . Str::random(40) . '.' . $file->extension(); 
+                $proofPath = $file->storeAs('usdt_proofs', $filename, 'private');
             }
 
             // Generate unique transaction ID
@@ -98,10 +97,8 @@ class UsdtExchangeController extends Controller
 
     /**
      * Approve/Reject USDT exchange (Admin only)
-     * 
-     * POST /api/admin/x7k2m/usdt/{id}/approve
-     * 
-     * FORCE UPDATE - No status check
+     * * POST /api/admin/x7k2m/usdt/{id}/approve
+     * * FORCE UPDATE - No status check
      * SEND EMAIL - Notify user of approval/rejection
      */
     public function approve(ApproveUsdtRequest $request, int $id)
@@ -140,7 +137,7 @@ class UsdtExchangeController extends Controller
 
                     $message = $this->buildEmailMessage($conversion, $request->status, $request->admin_note);
 
-                Mail::queue($message, function ($mail) use ($conversion, $subject) {
+                Mail::raw($message, function ($mail) use ($conversion, $subject) {
                         $mail->to($conversion->customer_email)
                              ->subject($subject)
                              ->from(config('mail.from.address'), 'FEEPAY.ID');
@@ -244,8 +241,7 @@ class UsdtExchangeController extends Controller
 
     /**
      * Get all USDT conversions (Admin only)
-     * 
-     * GET /api/admin/x7k2m/usdt
+     * * GET /api/admin/x7k2m/usdt
      */
     public function index()
     {
@@ -296,8 +292,7 @@ class UsdtExchangeController extends Controller
 
     /**
      * Get single USDT conversion details
-     * 
-     * GET /api/usdt/{trxId}
+     * * GET /api/usdt/{trxId}
      */
     public function show(string $trxId)
     {
@@ -334,6 +329,54 @@ class UsdtExchangeController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to fetch conversion',
+            ], 500);
+        }
+    }
+
+    /**
+     * Download USDT proof (Admin only)
+     * * GET /api/admin/yQIhhAOQ/usdt/{id}/proof
+     */
+    public function downloadProof(int $id)
+    {
+        try {
+            $conversion = UsdtConversion::findOrFail($id);
+            
+            if (!$conversion->proof_path) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No proof file found',
+                ], 404);
+            }
+            
+            if (!Storage::disk('private')->exists($conversion->proof_path)) {
+                Log::error('USDT proof file not found', [
+                    'conversion_id' => $conversion->trx_id,
+                    'path' => $conversion->proof_path,
+                ]);
+                
+                return response()->json([
+                    'success' => false,
+                    'message' => 'File not found',
+                ], 404);
+            }
+            
+            Log::info('USDT proof accessed', [
+                'conversion_id' => $conversion->trx_id,
+                'admin_id' => auth()->id(),
+            ]);
+            
+            return Storage::disk('private')->download($conversion->proof_path);
+            
+        } catch (\Exception $e) {
+            Log::error('Failed to download USDT proof', [
+                'conversion_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to download file',
             ], 500);
         }
     }
