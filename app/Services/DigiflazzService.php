@@ -20,15 +20,12 @@ class DigiflazzService
         $this->apiKey = config('services.digiflazz.api_key');
         $this->baseUrl = config('services.digiflazz.base_url', 'https://api.digiflazz.com/v1');
         
-        // Generate signature (MD5 of username + apiKey + 'df')
+        // Signature 'df' → untuk price list & transaksi umum
         $this->signature = md5($this->username . $this->apiKey . 'df');
     }
 
     /**
      * Get product price from LOCAL database (NOT API)
-     * 
-     * @param string $sku Product SKU
-     * @return array
      */
     public function getProductPrice(string $sku): array
     {
@@ -71,9 +68,6 @@ class DigiflazzService
 
     /**
      * Get price list from Digiflazz API
-     * 
-     * @param string|null $category Filter by category (optional)
-     * @return array
      */
     public function getPriceList(?string $category = null): array
     {
@@ -81,7 +75,7 @@ class DigiflazzService
             $payload = [
                 'cmd' => 'prepaid',
                 'username' => $this->username,
-                'sign' => $this->signature,
+                'sign' => $this->signature, // pakai 'df'
             ];
 
             $response = Http::timeout(30)
@@ -97,7 +91,6 @@ class DigiflazzService
                 throw new Exception('Invalid response format from Digiflazz');
             }
 
-            // Filter by category if provided
             if ($category) {
                 $data['data'] = array_filter($data['data'], function ($item) use ($category) {
                     return isset($item['category']) && 
@@ -131,11 +124,7 @@ class DigiflazzService
 
     /**
      * Place order to Digiflazz (REAL API)
-     * 
-     * @param string $sku Product SKU
-     * @param string $targetNumber Customer number/ID
-     * @param string $refId Reference ID (unique order ID)
-     * @return array
+     * Signature: MD5(username + apiKey + ref_id)
      */
     public function placeOrder(string $sku, string $targetNumber, string $refId): array
     {
@@ -186,9 +175,7 @@ class DigiflazzService
 
     /**
      * Check order status from Digiflazz
-     * 
-     * @param string $refId Reference ID
-     * @return array
+     * Signature: MD5(username + apiKey + ref_id)
      */
     public function checkOrderStatus(string $refId): array
     {
@@ -235,7 +222,11 @@ class DigiflazzService
     /**
      * Get account balance from Digiflazz
      * 
-     * @return array
+     * ✅ FIX: Signature cek saldo WAJIB pakai 'depo' bukan 'df'
+     * Aturan Digiflazz:
+     * - Price list  → MD5(username + apiKey + 'df')
+     * - Cek saldo   → MD5(username + apiKey + 'depo')  ← BEDA!
+     * - Transaksi   → MD5(username + apiKey + ref_id)
      */
     public function getBalance(): array
     {
@@ -243,7 +234,8 @@ class DigiflazzService
             $payload = [
                 'cmd' => 'deposit',
                 'username' => $this->username,
-                'sign' => $this->signature,
+                // ✅ FIX: Pakai 'depo' bukan $this->signature ('df')
+                'sign' => md5($this->username . $this->apiKey . 'depo'),
             ];
 
             $response = Http::timeout(30)

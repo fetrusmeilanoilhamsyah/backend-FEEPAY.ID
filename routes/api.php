@@ -91,6 +91,7 @@ Route::prefix('admin/' . config('app.admin_path'))
         Route::prefix('dashboard')->group(function () {
             Route::get('/stats', [DashboardController::class, 'stats']);
             Route::get('/products', [DashboardController::class, 'productStats']);
+            Route::get('/balance', [DashboardController::class, 'getBalance']);
         });
 
         // Orders Management
@@ -118,9 +119,9 @@ Route::prefix('admin/' . config('app.admin_path'))
         });
 
         // Products Management
-Route::prefix('products')->group(function () {
-    Route::post('/sync', [ProductController::class, 'sync']);
-    Route::post('/bulk-margin', [ProductController::class, 'bulkUpdateMargin']); // ← TAMBAH INI
-    Route::put('/{id}', [ProductController::class, 'update']);
-});
+        Route::prefix('products')->group(function () {
+            Route::post('/sync', [ProductController::class, 'sync']);
+            Route::post('/bulk-margin', [ProductController::class, 'bulkUpdateMargin']);
+            Route::put('/{id}', [ProductController::class, 'update']);
+        });
     });

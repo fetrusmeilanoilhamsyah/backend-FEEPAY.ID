@@ -15,8 +15,7 @@ class DashboardController extends Controller
 {
     /**
      * Get dashboard statistics (Admin only)
-     * 
-     * GET /api/admin/x7k2m/dashboard/stats
+     * * GET /api/admin/x7k2m/dashboard/stats
      */
     public function stats(Request $request)
     {
@@ -111,8 +110,7 @@ class DashboardController extends Controller
 
     /**
      * Get product sales statistics (Admin only)
-     * 
-     * GET /api/admin/x7k2m/dashboard/products
+     * * GET /api/admin/x7k2m/dashboard/products
      */
     public function productStats()
     {
@@ -144,6 +142,59 @@ class DashboardController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to fetch product statistics',
+            ], 500);
+        }
+    }
+
+    /**
+     * Get Digiflazz account balance
+     * Dipanggil dari admin dashboard untuk monitor saldo
+     * Saldo penting: kalau habis → semua order GAGAL otomatis
+     * * GET /api/admin/x7k2m/dashboard/balance
+     */
+    public function getBalance()
+    {
+        try {
+            $digiflazzService = app(\App\Services\DigiflazzService::class);
+            $result = $digiflazzService->getBalance();
+
+            if (!$result['success']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Gagal ambil saldo: ' . $result['message'],
+                ], 400);
+            }
+
+            $balance = $result['data']['deposit'] ?? 0;
+
+            // Warning kalau saldo dibawah threshold
+            // Ubah angka 50000 sesuai kebutuhan kamu
+            $isLow = $balance < 50000;
+
+            Log::info('Digiflazz balance checked by admin', [
+                'balance' => $balance,
+                'is_low' => $isLow,
+                'admin_id' => auth()->id(),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'balance' => $balance,
+                    'balance_formatted' => 'Rp ' . number_format($balance, 0, ',', '.'),
+                    'is_low' => $isLow,
+                    'warning_threshold' => 50000,
+                ],
+            ], 200);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to get Digiflazz balance', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal cek saldo: ' . $e->getMessage(),
             ], 500);
         }
     }
