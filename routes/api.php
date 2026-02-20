@@ -49,13 +49,14 @@ Route::middleware('throttle:20,1')->group(function () {
 // ✅ Webhooks - Permissive but protected (100 per minute)
 Route::middleware('throttle:100,1')->group(function () {
     Route::post('/callback/digiflazz', [CallbackController::class, 'digiflazz']);
-    Route::post('/callback/midtrans', [MidtransPaymentController::class, 'handleNotification']);
+    Route::post('/midtrans/webhook', [MidtransPaymentController::class, 'handleNotification']);
 });
 
 // ✅ Read-only endpoints - Liberal rate limit (60 per minute)
 Route::middleware('throttle:60,1')->group(function () {
     Route::get('/products', [ProductController::class, 'index']);
-    Route::get('/orders/{orderId}', [OrderController::class, 'show']);
+    // ✅ FIX H-06: Ganti GET ke POST, wajib kirim email untuk verifikasi
+    Route::post('/orders/{orderId}', [OrderController::class, 'show']);
     Route::get('/usdt/rate', [UsdtRateController::class, 'getCurrent']);
     Route::get('/usdt/{trxId}', [UsdtExchangeController::class, 'show']);
     Route::get('/support/contacts', [SupportController::class, 'getContacts']);
@@ -68,9 +69,6 @@ Route::middleware('throttle:60,1')->group(function () {
 */
 
 Route::prefix('admin')->group(function () {
-    // Login sudah di-rate limit di atas
-    
-    // Protected admin auth routes
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::get('/me', [AuthController::class, 'me']);

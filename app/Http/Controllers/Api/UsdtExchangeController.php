@@ -18,14 +18,13 @@ class UsdtExchangeController extends Controller
 {
     /**
      * Submit USDT exchange request (Public)
-     * * POST /api/usdt/submit
+     * POST /api/usdt/submit
      */
     public function submit(StoreUsdtExchangeRequest $request)
     {
         try {
             DB::beginTransaction();
 
-            // Handle file upload
             $proofPath = null;
             if ($request->hasFile('proof')) {
                 $file = $request->file('proof');
@@ -33,10 +32,8 @@ class UsdtExchangeController extends Controller
                 $proofPath = $file->storeAs('usdt_proofs', $filename, 'private');
             }
 
-            // Generate unique transaction ID
             $trxId = 'USDT' . strtoupper(Str::random(8)) . time();
 
-            // Create conversion record
             $conversion = UsdtConversion::create([
                 'trx_id' => $trxId,
                 'amount' => $request->amount,
@@ -78,11 +75,13 @@ class UsdtExchangeController extends Controller
         } catch (Exception $e) {
             DB::rollBack();
 
-            // Clean up uploaded file if exists
+            // ✅ FIX M-02: Ganti disk('public') ke disk('private')
+            // File disimpan di private, cleanup juga harus di private
             if (isset($proofPath) && $proofPath) {
-                Storage::disk('public')->delete($proofPath);
+                Storage::disk('private')->delete($proofPath);
             }
 
+            // ✅ FIX M-01: Jangan expose $e->getMessage() ke user
             Log::error('USDT exchange submission failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -90,16 +89,13 @@ class UsdtExchangeController extends Controller
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to submit exchange request: ' . $e->getMessage(),
+                'message' => 'Gagal mengirim permintaan exchange',
             ], 500);
         }
     }
 
     /**
      * Approve/Reject USDT exchange (Admin only)
-     * * POST /api/admin/x7k2m/usdt/{id}/approve
-     * * FORCE UPDATE - No status check
-     * SEND EMAIL - Notify user of approval/rejection
      */
     public function approve(ApproveUsdtRequest $request, int $id)
     {
@@ -115,12 +111,8 @@ class UsdtExchangeController extends Controller
                 ], 404);
             }
 
-            // REMOVED STRICT STATUS CHECK - Allow force update
-            // Admin can change status anytime
-
             $oldStatus = $conversion->status;
 
-            // Update status with audit trail
             $conversion->update([
                 'status' => $request->status,
                 'admin_note' => $request->admin_note,
@@ -128,7 +120,6 @@ class UsdtExchangeController extends Controller
                 'approved_at' => now(),
             ]);
 
-            // Send email notification
             if ($conversion->customer_email) {
                 try {
                     $subject = $request->status === 'approved' 
@@ -137,7 +128,7 @@ class UsdtExchangeController extends Controller
 
                     $message = $this->buildEmailMessage($conversion, $request->status, $request->admin_note);
 
-                Mail::raw($message, function ($mail) use ($conversion, $subject) {
+                    Mail::raw($message, function ($mail) use ($conversion, $subject) {
                         $mail->to($conversion->customer_email)
                              ->subject($subject)
                              ->from(config('mail.from.address'), 'FEEPAY.ID');
@@ -154,7 +145,6 @@ class UsdtExchangeController extends Controller
                         'trx_id' => $conversion->trx_id,
                         'error' => $emailError->getMessage(),
                     ]);
-                    // Don't fail the entire operation if email fails
                 }
             }
 
@@ -186,6 +176,7 @@ class UsdtExchangeController extends Controller
         } catch (Exception $e) {
             DB::rollBack();
 
+            // ✅ FIX M-01: Jangan expose $e->getMessage() ke user
             Log::error('USDT approval failed', [
                 'conversion_id' => $id,
                 'error' => $e->getMessage(),
@@ -193,7 +184,7 @@ class UsdtExchangeController extends Controller
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to process approval: ' . $e->getMessage(),
+                'message' => 'Gagal memproses approval',
             ], 500);
         }
     }
@@ -241,7 +232,6 @@ class UsdtExchangeController extends Controller
 
     /**
      * Get all USDT conversions (Admin only)
-     * * GET /api/admin/x7k2m/usdt
      */
     public function index()
     {
@@ -256,7 +246,7 @@ class UsdtExchangeController extends Controller
                         'amount' => $conversion->amount,
                         'network' => $conversion->network,
                         'idr_received' => $conversion->idr_received,
-                        'bank_details' => $conversion->bank_details, // Decoded array
+                        'bank_details' => $conversion->bank_details,
                         'proof_path' => $conversion->proof_path,
                         'proof_url' => $conversion->proof_path ? asset('storage/' . $conversion->proof_path) : null,
                         'customer_email' => $conversion->customer_email,
@@ -279,20 +269,20 @@ class UsdtExchangeController extends Controller
             ], 200);
 
         } catch (Exception $e) {
+            // ✅ FIX M-01: Jangan expose $e->getMessage() ke user
             Log::error('Failed to fetch USDT conversions', [
                 'error' => $e->getMessage(),
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to fetch conversions',
+                'message' => 'Gagal mengambil data konversi',
             ], 500);
         }
     }
 
     /**
      * Get single USDT conversion details
-     * * GET /api/usdt/{trxId}
      */
     public function show(string $trxId)
     {
@@ -321,6 +311,7 @@ class UsdtExchangeController extends Controller
             ], 200);
 
         } catch (Exception $e) {
+            // ✅ FIX M-01: Jangan expose $e->getMessage() ke user
             Log::error('Failed to fetch USDT conversion', [
                 'trx_id' => $trxId,
                 'error' => $e->getMessage(),
@@ -328,14 +319,13 @@ class UsdtExchangeController extends Controller
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to fetch conversion',
+                'message' => 'Gagal mengambil data konversi',
             ], 500);
         }
     }
 
     /**
      * Download USDT proof (Admin only)
-     * * GET /api/admin/yQIhhAOQ/usdt/{id}/proof
      */
     public function downloadProof(int $id)
     {
@@ -368,7 +358,8 @@ class UsdtExchangeController extends Controller
             
             return Storage::disk('private')->download($conversion->proof_path);
             
-        } catch (\Exception $e) {
+        } catch (Exception $e) {
+            // ✅ FIX M-01: Jangan expose $e->getMessage() ke user
             Log::error('Failed to download USDT proof', [
                 'conversion_id' => $id,
                 'error' => $e->getMessage(),
@@ -376,7 +367,7 @@ class UsdtExchangeController extends Controller
             
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to download file',
+                'message' => 'Gagal mengunduh file',
             ], 500);
         }
     }

@@ -24,7 +24,24 @@ class StoreUsdtExchangeRequest extends FormRequest
             'bank_name' => 'required|string|max:100',
             'account_number' => 'required|string|max:50',
             'account_name' => 'required|string|max:255',
-            'proof' => 'required|file|mimes:jpg,jpeg,png,pdf|max:5120', // 5MB max
+            'proof' => [
+                'required',
+                'file',
+                'mimes:jpg,jpeg,png,pdf',
+                'max:5120',
+                // ✅ FIX L-01: Cek magic bytes — isi file beneran, bukan cuma ekstensi
+                // Mencegah hacker rename shell.php jadi bukti.jpg
+                function ($attribute, $value, $fail) {
+                    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                    $mimeType = finfo_file($finfo, $value->getPathname());
+                    finfo_close($finfo);
+
+                    $allowed = ['image/jpeg', 'image/png', 'application/pdf'];
+                    if (!in_array($mimeType, $allowed)) {
+                        $fail('File tidak valid atau telah dimanipulasi');
+                    }
+                }
+            ],
         ];
     }
 

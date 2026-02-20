@@ -11,6 +11,7 @@ use App\Services\DigiflazzService;
 use App\Mail\OrderSuccess;
 use App\Enums\OrderStatus;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -29,9 +30,28 @@ class OrderController extends Controller
     public function store(StoreOrderRequest $request)
     {
         try {
+            // ✅ FIX M-03: Idempotency check — cegah double order dari spam klik
+            // Frontend kirim X-Idempotency-Key di setiap request (sudah ada di api.js)
+            $idempotencyKey = $request->header('X-Idempotency-Key');
+            if ($idempotencyKey) {
+                $cacheKey = 'idempotency:order:' . $idempotencyKey;
+                $cached = Cache::get($cacheKey);
+                if ($cached) {
+                    // Request duplikat — return order yang sama, jangan buat baru
+                    Log::info('Duplicate order request blocked', [
+                        'idempotency_key' => $idempotencyKey,
+                        'ip' => $request->ip(),
+                    ]);
+                    return response()->json([
+                        'success' => true,
+                        'message' => 'Order created',
+                        'data' => $cached,
+                    ], 201);
+                }
+            }
+
             DB::beginTransaction();
 
-            // 1. Ambil Harga Modal dari Digiflazz (Pakai fungsi getProductPrice di Service Boss)
             $priceResponse = $this->digiflazzService->getProductPrice($request->sku);
 
             if (!$priceResponse['success']) {
@@ -40,11 +60,8 @@ class OrderController extends Controller
 
             $productData = $priceResponse['data'];
             $costPrice = $productData['price'] ?? 0;
-            
-            // Hitung Harga Jual (Modal + Margin dari config)
             $sellingPrice = $costPrice + config('feepay.margin', 1000);
 
-            // 2. Simpan/Update data produk ke database lokal
             $product = Product::updateOrCreate(
                 ['sku' => $request->sku],
                 [
@@ -55,7 +72,6 @@ class OrderController extends Controller
                 ]
             );
 
-            // 3. Buat Data Order
             $order = Order::create([
                 'order_id' => 'FP' . strtoupper(Str::random(8)) . time(),
                 'sku' => $request->sku,
@@ -67,7 +83,12 @@ class OrderController extends Controller
             ]);
 
             DB::commit();
-            
+
+            // ✅ FIX M-03: Simpan ke cache 24 jam — request duplikat return order yang sama
+            if ($idempotencyKey) {
+                Cache::put($cacheKey, $order, now()->addHours(24));
+            }
+
             Log::info('Order Created', ['order_id' => $order->order_id]);
 
             return response()->json(['success' => true, 'message' => 'Order created', 'data' => $order], 201);
@@ -75,7 +96,7 @@ class OrderController extends Controller
         } catch (Exception $e) {
             DB::rollBack();
             Log::error('Order Store Failed', ['error' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => 'Terjadi kesalahan sistem'], 500);
         }
     }
 
@@ -95,7 +116,6 @@ class OrderController extends Controller
                 return response()->json(['success' => false, 'message' => 'Order already processed'], 400);
             }
 
-            // Tembak API Digiflazz
             $digiflazz = $this->digiflazzService->placeOrder($order->sku, $order->target_number, $order->order_id);
 
             if (!$digiflazz['success']) {
@@ -107,7 +127,6 @@ class OrderController extends Controller
 
             $apiData = $digiflazz['data'];
 
-            // UPDATE: Gunakan Status PROCESSING (Biru) agar tidak error SQL Enum
             $order->update([
                 'status' => OrderStatus::PROCESSING->value,
                 'sn' => $apiData['sn'] ?? '-',
@@ -123,33 +142,30 @@ class OrderController extends Controller
         } catch (Exception $e) {
             DB::rollBack();
             Log::error('Confirm Order Failed', ['error' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => 'Terjadi kesalahan sistem'], 500);
         }
     }
 
     /**
-     * [FITUR BARU] Sinkronisasi Status dengan Digiflazz API
+     * Sinkronisasi Status dengan Digiflazz API
      */
     public function syncStatus($orderId)
     {
         try {
             $order = Order::where('order_id', $orderId)->firstOrFail();
             
-            // Panggil checkOrderStatus dari Service Boss
             $result = $this->digiflazzService->checkOrderStatus($order->order_id);
 
             if ($result['success']) {
                 $apiData = $result['data'];
                 $digiStatus = strtolower($apiData['status'] ?? '');
 
-                // Map status dari Digiflazz ke Enum kita
                 $newStatus = match($digiStatus) {
                     'sukses' => OrderStatus::SUCCESS,
                     'gagal' => OrderStatus::FAILED,
                     default => OrderStatus::PROCESSING,
                 };
 
-                // Jika status berubah, baru kita update DB
                 if ($order->status !== $newStatus->value) {
                     $order->update([
                         'status' => $newStatus->value,
@@ -158,7 +174,6 @@ class OrderController extends Controller
                     
                     $order->logStatusChange($newStatus, "Sync Status: " . ($apiData['message'] ?? 'Synced'));
 
-                    // Kirim Email HANYA jika status berubah jadi SUCCESS
                     if ($newStatus === OrderStatus::SUCCESS) {
                         try {
                             $product = Product::where('sku', $order->sku)->first();
@@ -175,7 +190,7 @@ class OrderController extends Controller
             return response()->json(['success' => false, 'message' => $result['message']], 400);
 
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => 'Terjadi kesalahan sistem'], 500);
         }
     }
 
@@ -184,9 +199,30 @@ class OrderController extends Controller
         return response()->json(['success' => true, 'data' => Order::orderBy('created_at', 'desc')->paginate(50)]);
     }
 
-    public function show(string $orderId)
+    /**
+     * Show order by ID
+     * ✅ FIX H-06: Verifikasi email sebelum return data order
+     */
+    public function show(Request $request, string $orderId)
     {
+        $request->validate([
+            'email' => 'required|email',
+        ]);
+
         $order = Order::where('order_id', $orderId)->first();
-        return $order ? response()->json(['success' => true, 'data' => $order]) : response()->json(['success' => false], 404);
+
+        if (!$order) {
+            return response()->json(['success' => false, 'message' => 'Order not found'], 404);
+        }
+
+        if (strtolower($request->email) !== strtolower($order->customer_email)) {
+            Log::warning('IDOR attempt - wrong email for order', [
+                'order_id' => $orderId,
+                'ip' => $request->ip(),
+            ]);
+            return response()->json(['success' => false, 'message' => 'Order not found'], 404);
+        }
+
+        return response()->json(['success' => true, 'data' => $order]);
     }
 }

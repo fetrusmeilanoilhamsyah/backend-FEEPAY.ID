@@ -36,14 +36,12 @@ class PaymentController extends Controller
         try {
             DB::beginTransaction();
 
-            // Lock record biar gak bentrok
             $payment = Payment::with('order')->lockForUpdate()->find($id);
 
             if (!$payment || !$payment->order) {
                 return response()->json(['success' => false, 'message' => 'Payment or Order not found'], 404);
             }
 
-            // 1. Update status payment
             $payment->update([
                 'status' => $request->status,
                 'admin_note' => $request->admin_note,
@@ -55,7 +53,6 @@ class PaymentController extends Controller
             $finalMessage = "Payment {$request->status} successfully";
 
             if ($request->status === 'verified') {
-                // 2. Tembak API Digiflazz
                 $digiflazzResponse = $this->digiflazzService->placeOrder(
                     $order->sku,
                     $order->target_number,
@@ -65,7 +62,6 @@ class PaymentController extends Controller
                 if ($digiflazzResponse['success']) {
                     $apiData = $digiflazzResponse['data'];
                     
-                    // Update Order ke Processing
                     $order->update([
                         'status' => 'processing',
                         'sn' => $apiData['sn'] ?? '-',
@@ -73,14 +69,12 @@ class PaymentController extends Controller
                         'confirmed_at' => now(),
                     ]);
 
-                    // Log status change
                     $order->logStatusChange(
                         OrderStatus::PROCESSING, 
                         'Auto-processed after payment verified', 
                         $request->user()->id
                     );
                     
-                    // ✅ SECURITY: Log admin action
                     Log::info('Payment verified and order processed', [
                         'payment_id' => $payment->payment_id,
                         'order_id' => $order->order_id,
@@ -88,7 +82,6 @@ class PaymentController extends Controller
                         'digiflazz_sn' => $apiData['sn'] ?? '-',
                     ]);
                 } else {
-                    // Jika GAGAL (Saldo habis, dll)
                     $order->update(['status' => 'failed']);
                     $order->logStatusChange(
                         OrderStatus::FAILED, 
@@ -97,7 +90,6 @@ class PaymentController extends Controller
                     );
                     $finalMessage = "Verified but Digiflazz Failed: " . $digiflazzResponse['message'];
                     
-                    // ✅ SECURITY: Log failure
                     Log::error('Digiflazz processing failed after payment verification', [
                         'payment_id' => $payment->payment_id,
                         'order_id' => $order->order_id,
@@ -105,7 +97,6 @@ class PaymentController extends Controller
                     ]);
                 }
             } else {
-                // Jika REJECTED oleh Admin
                 $order->update(['status' => 'failed']);
                 $order->logStatusChange(
                     OrderStatus::FAILED, 
@@ -113,7 +104,6 @@ class PaymentController extends Controller
                     $request->user()->id
                 );
                 
-                // ✅ SECURITY: Log rejection
                 Log::info('Payment rejected by admin', [
                     'payment_id' => $payment->payment_id,
                     'order_id' => $order->order_id,
@@ -145,7 +135,7 @@ class PaymentController extends Controller
             
             return response()->json([
                 'success' => false, 
-                'message' => 'System Error: ' . $e->getMessage()
+                'message' => 'Terjadi kesalahan sistem'
             ], 500);
         }
     }
@@ -188,32 +178,26 @@ class PaymentController extends Controller
             
             return response()->json([
                 'success' => false, 
-                'message' => $e->getMessage()
+                'message' => 'Terjadi kesalahan sistem'
             ], 500);
         }
     }
 
     /**
      * Submit payment proof (User)
-     * ✅ SECURITY IMPROVEMENTS:
-     * - Strict file validation (mimes, size)
-     * - Random filename (prevent directory traversal)
-     * - Private storage (not public accessible)
-     * - Enhanced logging
      */
     public function submit(StorePaymentRequest $request)
     {
         try {
-            // ✅ SECURITY: Additional file validation
             $request->validate([
                 'order_id' => 'required|string|exists:orders,order_id',
                 'type' => 'required|string|in:bank_transfer,qris',
-                'amount' => 'required|numeric|min:1',
+                // ✅ FIX C-02: 'amount' dihapus dari validasi — tidak diterima dari user
                 'proof' => [
                     'required',
                     'file',
-                    'mimes:jpg,jpeg,png,pdf',  // ✅ Whitelist only safe formats
-                    'max:5120',  // ✅ 5MB max
+                    'mimes:jpg,jpeg,png,pdf',
+                    'max:5120',
                 ],
             ]);
             
@@ -222,7 +206,6 @@ class PaymentController extends Controller
             $order = Order::where('order_id', $request->order_id)->first();
             
             if (!$order || $order->payment_id) {
-                // ✅ SECURITY: Log suspicious activity
                 Log::warning('Invalid payment submission attempt', [
                     'order_id' => $request->order_id,
                     'ip' => $request->ip(),
@@ -238,16 +221,9 @@ class PaymentController extends Controller
             $proofPath = null;
             if ($request->hasFile('proof')) {
                 $file = $request->file('proof');
-                
-                // ✅ SECURITY: Generate completely random filename
-                // JANGAN pakai time() atau filename asli untuk avoid predictability
                 $filename = Str::random(40) . '.' . $file->extension();
-                
-                // ✅ SECURITY: Store di PRIVATE disk (bukan public!)
-                // File tidak bisa diakses langsung via URL
                 $proofPath = $file->storeAs('payment_proofs', $filename, 'private');
                 
-                // ✅ SECURITY: Log file upload
                 Log::info('Payment proof uploaded', [
                     'order_id' => $request->order_id,
                     'filename' => $filename,
@@ -260,7 +236,9 @@ class PaymentController extends Controller
             $payment = Payment::create([
                 'payment_id' => 'PAY' . strtoupper(Str::random(5)) . time(),
                 'type' => $request->type,
-                'amount' => $request->amount,
+                // ✅ FIX C-02: Amount diambil dari DB, bukan dari request
+                // Mencegah user manipulasi harga (kirim amount=1 untuk order 100.000)
+                'amount' => $order->total_price,
                 'proof_path' => $proofPath,
                 'status' => 'pending',
             ]);
@@ -269,11 +247,10 @@ class PaymentController extends Controller
 
             DB::commit();
             
-            // ✅ SECURITY: Log successful submission
             Log::info('Payment submitted successfully', [
                 'payment_id' => $payment->payment_id,
                 'order_id' => $order->order_id,
-                'amount' => $request->amount,
+                'amount' => $order->total_price,
                 'type' => $request->type,
             ]);
             
@@ -283,7 +260,6 @@ class PaymentController extends Controller
             ], 201);
             
         } catch (\Illuminate\Validation\ValidationException $e) {
-            // ✅ SECURITY: Log validation failures
             Log::warning('Payment submission validation failed', [
                 'order_id' => $request->order_id,
                 'errors' => $e->errors(),
@@ -299,7 +275,6 @@ class PaymentController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             
-            // ✅ SECURITY: Log errors
             Log::error('Payment submission failed', [
                 'order_id' => $request->order_id ?? null,
                 'error' => $e->getMessage(),
@@ -314,8 +289,7 @@ class PaymentController extends Controller
     }
     
     /**
-     * ✅ OPTIONAL: Method untuk download payment proof (Admin only)
-     * Karena file disimpan di private storage
+     * Download payment proof (Admin only)
      */
     public function downloadProof(int $id)
     {
@@ -329,7 +303,6 @@ class PaymentController extends Controller
                 ], 404);
             }
             
-            // Check if file exists
             if (!Storage::disk('private')->exists($payment->proof_path)) {
                 Log::error('Payment proof file not found', [
                     'payment_id' => $payment->payment_id,
@@ -342,13 +315,11 @@ class PaymentController extends Controller
                 ], 404);
             }
             
-            // ✅ SECURITY: Log file access
             Log::info('Payment proof accessed', [
                 'payment_id' => $payment->payment_id,
                 'admin_id' => auth()->id(),
             ]);
             
-            // Return file download
             return Storage::disk('private')->download($payment->proof_path);
             
         } catch (\Exception $e) {
