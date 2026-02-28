@@ -13,11 +13,18 @@ class OrderFailed extends Mailable
 {
     use Queueable, SerializesModels;
 
+    /**
+     * Create a new message instance.
+     * Variabel $order dan $reason otomatis tersedia di template Blade.
+     */
     public function __construct(
         public Order $order,
         public string $reason = 'Terjadi kesalahan saat memproses pesanan Anda.'
     ) {}
 
+    /**
+     * Get the message envelope.
+     */
     public function envelope(): Envelope
     {
         return new Envelope(
@@ -25,6 +32,9 @@ class OrderFailed extends Mailable
         );
     }
 
+    /**
+     * Get the message content definition.
+     */
     public function content(): Content
     {
         return new Content(
@@ -32,6 +42,9 @@ class OrderFailed extends Mailable
         );
     }
 
+    /**
+     * Get the attachments for the message.
+     */
     public function attachments(): array
     {
         return [];
