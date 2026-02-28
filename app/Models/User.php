@@ -11,6 +11,9 @@ class User extends Authenticatable
 {
     use HasApiTokens, HasFactory, Notifiable;
 
+    /**
+     * Kolom yang dapat diisi (Mass Assignable).
+     */
     protected $fillable = [
         'name',
         'email',
@@ -19,11 +22,17 @@ class User extends Authenticatable
         'is_active',
     ];
 
+    /**
+     * Kolom yang disembunyikan saat output API.
+     */
     protected $hidden = [
         'password',
         'remember_token',
     ];
 
+    /**
+     * Casting tipe data kolom.
+     */
     protected $casts = [
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
@@ -31,7 +40,7 @@ class User extends Authenticatable
     ];
 
     /**
-     * Check if user is admin
+     * Cek apakah user adalah admin FEEPAY.ID.
      */
     public function isAdmin(): bool
     {
@@ -39,18 +48,11 @@ class User extends Authenticatable
     }
 
     /**
-     * Orders confirmed by this admin
+     * Relasi ke pesanan yang dikonfirmasi oleh admin ini.
+     * Berguna untuk fitur 'Approve Manual' di Dashboard.
      */
     public function confirmedOrders()
     {
         return $this->hasMany(Order::class, 'confirmed_by');
-    }
-
-    /**
-     * USDT conversions approved by this admin
-     */
-    public function approvedConversions()
-    {
-        return $this->hasMany(UsdtConversion::class, 'approved_by');
     }
 }
