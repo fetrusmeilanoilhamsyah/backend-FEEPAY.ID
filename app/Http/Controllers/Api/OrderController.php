@@ -8,9 +8,10 @@ use App\Http\Requests\ConfirmOrderRequest;
 use App\Models\Order;
 use App\Models\Product;
 use App\Services\DigiflazzService;
+use App\Services\TelegramService;
 use App\Mail\OrderSuccess;
 use App\Enums\OrderStatus;
-use Illuminate\Http\Request;
+use Illuminate\Http\Request; // SUDAH DIPERBAIKI (Tadinya 'uses')
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -25,12 +26,11 @@ class OrderController extends Controller
     ) {}
 
     /**
-     * Membuat Pesanan Baru (Mendukung Top Up Game & Standard)
+     * Membuat Pesanan Baru
      */
     public function store(StoreOrderRequest $request)
     {
         try {
-            // Idempotency check — cegah double order dari spam klik
             $idempotencyKey = $request->header('X-Idempotency-Key');
             if ($idempotencyKey) {
                 $cacheKey = 'idempotency:order:' . $idempotencyKey;
@@ -46,22 +46,20 @@ class OrderController extends Controller
 
             DB::beginTransaction();
 
-            // Ambil data produk terbaru dari DB Lokal (Hasil Sync)
             $product = Product::where('sku', $request->sku)->first();
 
             if (!$product) {
-                return response()->json(['success' => false, 'message' => 'Produk tidak ditemukan atau sedang tidak aktif'], 400);
+                return response()->json(['success' => false, 'message' => 'Produk tidak ditemukan'], 400);
             }
 
-            // Generate Order ID Unik
             $orderId = 'FP' . strtoupper(Str::random(5)) . date('his');
 
             $order = Order::create([
                 'order_id' => $orderId,
                 'sku' => $request->sku,
                 'product_name' => $product->name,
-                'target_number' => $request->target_number, // User ID Game atau No HP
-                'zone_id' => $request->zone_id, // KHUSUS GAME (Bisa null)
+                'target_number' => $request->target_number,
+                'zone_id' => $request->zone_id,
                 'customer_email' => $request->customer_email,
                 'total_price' => $product->selling_price,
                 'status' => OrderStatus::PENDING->value,
@@ -80,12 +78,12 @@ class OrderController extends Controller
         } catch (Exception $e) {
             DB::rollBack();
             Log::error('Order Store Failed', ['error' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Gagal membuat pesanan: ' . $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => 'Gagal membuat pesanan'], 500);
         }
     }
 
     /**
-     * Konfirmasi Pesanan & Eksekusi ke Digiflazz (Admin Only)
+     * Konfirmasi Pesanan & Eksekusi ke Digiflazz
      */
     public function confirm(ConfirmOrderRequest $request, int $id)
     {
@@ -100,7 +98,6 @@ class OrderController extends Controller
                 return response()->json(['success' => false, 'message' => 'Pesanan sudah diproses sebelumnya'], 400);
             }
 
-            // Gabungkan UserID + ZoneID jika ini adalah produk Game (Aturan Digiflazz)
             $target = $order->target_number;
             if ($order->zone_id) {
                 $target = $order->target_number . $order->zone_id;
@@ -109,15 +106,29 @@ class OrderController extends Controller
             // Kirim ke Digiflazz
             $digiflazz = $this->digiflazzService->placeOrder($order->sku, $target, $order->order_id);
 
+            // HANDLE JIKA GAGAL DI AWAL (MISAL: SALDO HABIS)
             if (!$digiflazz['success']) {
                 $order->markAsFailed($request->user()->id, 'Digiflazz: ' . $digiflazz['message']);
                 DB::commit();
+
+                // NOTIFIKASI KE TELEGRAM
+                TelegramService::notify("
+⚠️ *DANGER: TRANSAKSI GAGAL (SISTEM)*
+----------------------------------
+*Order ID:* #{$order->order_id}
+*Produk:* {$order->product_name}
+*Target:* $target
+*Eror:* Digiflazz Rejected
+*Pesan:* {$digiflazz['message']}
+----------------------------------
+_Laporan: Segera cek saldo Digiflazz!_
+                ");
+
                 return response()->json(['success' => false, 'message' => $digiflazz['message']], 400);
             }
 
             $apiData = $digiflazz['data'];
 
-            // Update status ke PROCESSING (Enum baru dari Migration)
             $order->update([
                 'status' => OrderStatus::PROCESSING,
                 'sn' => $apiData['sn'] ?? '-',
@@ -128,17 +139,33 @@ class OrderController extends Controller
             $order->logStatusChange(OrderStatus::PROCESSING, 'Berhasil diteruskan ke provider', $request->user()->id);
 
             DB::commit();
+
+            // NOTIFIKASI KE TELEGRAM
+            TelegramService::notify("
+⏳ *TRANSAKSI DIPROSES*
+----------------------------------
+*Order ID:* #{$order->order_id}
+*Produk:* {$order->product_name}
+*Target:* $target
+*Nominal:* Rp " . number_format($order->total_price, 0, ',', '.') . "
+----------------------------------
+_Menunggu callback sukses..._
+            ");
+
             return response()->json(['success' => true, 'message' => 'Pesanan sedang diproses provider', 'sn' => $order->sn], 200);
 
         } catch (Exception $e) {
             DB::rollBack();
             Log::error('Confirm Order Failed', ['error' => $e->getMessage()]);
+
+            TelegramService::notify("🚨 *SYSTEM ERROR:* Gagal konfirmasi order #{$id}.");
+
             return response()->json(['success' => false, 'message' => 'Sistem gagal memproses konfirmasi'], 500);
         }
     }
 
     /**
-     * Sinkronisasi Status Order (Cek berkala ke Digiflazz)
+     * Sinkronisasi Status Order
      */
     public function syncStatus($orderId)
     {
@@ -163,6 +190,17 @@ class OrderController extends Controller
                     ]);
                     
                     $order->logStatusChange($newStatus, "Update otomatis dari provider");
+
+                    $emoji = ($newStatus === OrderStatus::SUCCESS) ? '✅' : '❌';
+                    TelegramService::notify("
+$emoji *UPDATE STATUS (SYNC)*
+----------------------------------
+*Order ID:* #{$order->order_id}
+*Produk:* {$order->product_name}
+*Status Baru:* " . strtoupper($digiStatus) . "
+*SN:* `{$order->sn}`
+----------------------------------
+                    ");
 
                     if ($newStatus === OrderStatus::SUCCESS) {
                         try {
