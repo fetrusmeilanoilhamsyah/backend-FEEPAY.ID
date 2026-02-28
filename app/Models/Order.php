@@ -15,6 +15,7 @@ class Order extends Model
         'sku',
         'product_name',
         'target_number',
+        'zone_id',          // Tambahan untuk Game
         'customer_email',
         'total_price',
         'status',
@@ -23,7 +24,7 @@ class Order extends Model
         'confirmed_by',
         'confirmed_at',
         
-        // ✅ TAMBAHAN: Midtrans fields
+        // Midtrans fields
         'midtrans_snap_token',
         'midtrans_transaction_id',
         'midtrans_payment_type',
@@ -33,15 +34,13 @@ class Order extends Model
 
     protected $casts = [
         'total_price' => 'decimal:2',
-        'status' => OrderStatus::class,
+        'status' => OrderStatus::class, // Menggunakan Enum OrderStatus Anda
         'confirmed_at' => 'datetime',
-        
-        // ✅ TAMBAHAN: Midtrans casts
         'midtrans_transaction_time' => 'datetime',
     ];
 
     /**
-     * Get the payment associated with this order
+     * Relasi ke sistem pembayaran
      */
     public function payment()
     {
@@ -49,7 +48,7 @@ class Order extends Model
     }
 
     /**
-     * Get the admin who confirmed this order
+     * Relasi ke admin yang konfirmasi
      */
     public function confirmedBy()
     {
@@ -57,7 +56,7 @@ class Order extends Model
     }
 
     /**
-     * Get the status histories for this order
+     * History status pesanan
      */
     public function statusHistories()
     {
@@ -65,7 +64,7 @@ class Order extends Model
     }
 
     /**
-     * Log status change
+     * Mencatat setiap perubahan status ke tabel history
      */
     public function logStatusChange(OrderStatus $status, ?string $note = null, ?int $userId = null): void
     {
@@ -77,73 +76,14 @@ class Order extends Model
         ]);
     }
 
-    /**
-     * Scope a query to only include pending orders
-     */
-    public function scopePending($query)
-    {
-        return $query->where('status', OrderStatus::PENDING->value);
-    }
-
-    /**
-     * Scope a query to only include successful orders
-     */
-    public function scopeSuccess($query)
-    {
-        return $query->where('status', OrderStatus::SUCCESS->value);
-    }
-
-    /**
-     * Scope a query to only include failed orders
-     */
-    public function scopeFailed($query)
-    {
-        return $query->where('status', OrderStatus::FAILED->value);
-    }
-
-    /**
-     * Mark order as successful
-     */
-    public function markAsSuccess(?int $userId = null): bool
-    {
-        $this->logStatusChange(OrderStatus::SUCCESS, 'Order processed successfully', $userId);
-        return $this->update(['status' => OrderStatus::SUCCESS->value]);
-    }
-
-    /**
-     * Mark order as failed
-     */
-    public function markAsFailed(?int $userId = null, ?string $reason = null): bool
-    {
-        $this->logStatusChange(OrderStatus::FAILED, $reason ?? 'Order failed', $userId);
-        return $this->update(['status' => OrderStatus::FAILED->value]);
-    }
-
-    // ============================================
-    // ✅ TAMBAHAN: Midtrans Helper Methods
-    // ============================================
-
-    /**
-     * Check if order is paid via Midtrans
-     */
-    public function isPaidViaMidtrans(): bool
-    {
-        return !is_null($this->midtrans_transaction_id);
-    }
-
-    /**
-     * Check if Midtrans payment is settled
-     */
-    public function isMidtransSettled(): bool
+    // Helper Status
+    public function isPaid(): bool
     {
         return in_array($this->midtrans_transaction_status, ['capture', 'settlement']);
     }
 
-    /**
-     * Check if order has Midtrans snap token
-     */
-    public function hasMidtransToken(): bool
+    public function isProcessing(): bool
     {
-        return !is_null($this->midtrans_snap_token);
+        return $this->status === OrderStatus::PROCESSING;
     }
 }

@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\Product;
 use App\Enums\OrderStatus;
-use App\Mail\OrderSuccess;
+use App\Jobs\SendOrderSuccessEmail;
 use App\Mail\OrderFailed;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -17,82 +17,44 @@ class CallbackController extends Controller
 {
     /**
      * Handle Digiflazz Callback
-     * 
-     * PENJELASAN:
-     * - Digiflazz akan POST ke endpoint ini setiap kali ada perubahan status order
-     * - Ada 3 kemungkinan status dari Digiflazz: Sukses, Gagal, Pending
-     * - Kita WAJIB verifikasi signature sebelum proses apapun (keamanan!)
-     * - Kalau sukses -> update status + kirim email ke customer
-     * - Kalau gagal -> update status + log error untuk debugging
-     * 
-     * CARA SETUP WEBHOOK DI DIGIFLAZZ:
-     * - Login ke dashboard Digiflazz
-     * - Masuk ke menu "API"
-     * - Set callback URL ke: https://yourdomain.com/api/callback/digiflazz
-     * - Saat testing pakai ngrok: https://xxxx.ngrok.io/api/callback/digiflazz
-     * 
      * POST /api/callback/digiflazz
      */
     public function digiflazz(Request $request)
     {
         try {
-            // Log semua incoming callback untuk debugging
-            // PENTING: Jangan hapus log ini, sangat berguna saat troubleshoot
             Log::info("Digiflazz callback received", $request->all());
 
             // ============================================
             // STEP 1: VERIFIKASI SIGNATURE
-            // Ini langkah KEAMANAN paling penting!
-            // Tujuan: Pastikan request beneran dari Digiflazz, bukan dari orang iseng
-            // Cara kerja: MD5 dari username + api_key + ref_id
             // ============================================
-            $username = config("services.digiflazz.username");
-            $apiKey   = config("services.digiflazz.api_key");
-            $refId    = $request->input("data.ref_id");
-
-            // Generate signature yang kita harapkan
+            $username     = config("services.digiflazz.username");
+            $apiKey       = config("services.digiflazz.api_key");
+            $refId        = $request->input("data.ref_id");
             $expectedSign = md5($username . $apiKey . $refId);
-
-            // Signature yang dikirim Digiflazz
             $receivedSign = $request->input("sign");
 
-            // Kalau signature tidak cocok -> TOLAK request
             if ($expectedSign !== $receivedSign) {
-                Log::warning("Invalid Digiflazz callback signature - Possible security threat!", [
+                Log::warning("Invalid Digiflazz callback signature", [
                     "expected" => $expectedSign,
                     "received" => $receivedSign,
                     "ref_id"   => $refId,
                     "ip"       => $request->ip(),
                 ]);
-
-                return response()->json([
-                    "success" => false,
-                    "message" => "Invalid signature",
-                ], 401);
+                return response()->json(['success' => false, 'message' => 'Invalid signature'], 401);
             }
 
             // ============================================
-            // STEP 2: CARI ORDER DI DATABASE
-            // ref_id dari Digiflazz = order_id kita
+            // STEP 2: CARI ORDER
             // ============================================
             $order = Order::where("order_id", $refId)->first();
 
             if (!$order) {
-                Log::warning("Order not found in Digiflazz callback", [
-                    "ref_id" => $refId,
-                ]);
-
-                return response()->json([
-                    "success" => false,
-                    "message" => "Order not found",
-                ], 404);
+                Log::warning("Order not found in Digiflazz callback", ["ref_id" => $refId]);
+                return response()->json(['success' => false, 'message' => 'Order not found'], 404);
             }
 
             // ============================================
             // STEP 3: AMBIL DATA CALLBACK
-            // Digiflazz kirim data dalam key "data"
-            // Status bisa: "Sukses", "Gagal", "Pending"
-            // SN = Serial Number produk (voucher code, token listrik, dll)
             // ============================================
             $status  = $request->input("data.status");
             $sn      = $request->input("data.sn");
@@ -100,16 +62,14 @@ class CallbackController extends Controller
 
             // ============================================
             // STEP 4: HANDLE STATUS SUKSES
-            // Kalau Digiflazz bilang sukses:
-            // 1. Update status order jadi SUCCESS
-            // 2. Simpan SN (serial number) produk
-            // 3. Log perubahan status
-            // 4. Kirim email sukses ke customer
+            // ✅ FIX B2: Ganti Mail::send() langsung ke dispatch(job)
+            // Alasan: Mail::send() sync bisa timeout → Digiflazz retry berkali-kali
+            // SendOrderSuccessEmail job: tries=3, timeout=60, implements ShouldQueue
             // ============================================
             if ($status === "Sukses") {
                 $order->update([
                     "status" => OrderStatus::SUCCESS->value,
-                    "sn"     => $sn, // Serial number dari Digiflazz
+                    "sn"     => $sn,
                 ]);
 
                 $order->logStatusChange(
@@ -122,23 +82,15 @@ class CallbackController extends Controller
                     "sn"       => $sn,
                 ]);
 
-                // Kirim email sukses ke customer
-                // Email berisi: order detail + serial number produk
-                // Template ada di: resources/views/emails/order-success.blade.php
-                $this->sendSuccessEmail($order);
+                // ✅ FIX B2: Dispatch ke queue, bukan Mail::send() langsung
+                // Job akan retry 3x kalau gagal (Brevo limit, timeout, dll)
+                $this->dispatchSuccessEmail($order);
 
             // ============================================
             // STEP 5: HANDLE STATUS GAGAL
-            // Kalau Digiflazz bilang gagal:
-            // 1. Update status order jadi FAILED
-            // 2. Log error detail untuk debugging
-            // 3. Kirim email gagal ke customer (pesan diterjemahkan jadi user-friendly)
-            // CATATAN: Kalau saldo habis, Digiflazz juga return Gagal
             // ============================================
             } elseif ($status === "Gagal") {
-                $order->update([
-                    "status" => OrderStatus::FAILED->value,
-                ]);
+                $order->update(["status" => OrderStatus::FAILED->value]);
 
                 $order->logStatusChange(
                     OrderStatus::FAILED,
@@ -148,19 +100,13 @@ class CallbackController extends Controller
                 Log::warning("Order marked as failed via Digiflazz callback", [
                     "order_id" => $order->order_id,
                     "message"  => $message,
-                    "note"     => "Possible causes: insufficient balance, invalid SKU, provider error",
                 ]);
 
-                // Kirim email gagal ke customer
-                // Raw reason dari Digiflazz akan diterjemahkan ke bahasa yang lebih friendly
-                // Template ada di: resources/views/emails/order-failed.blade.php
+                // Email gagal tetap sync karena lebih ringan dan tidak blocking
                 $this->sendFailedEmail($order, $message);
 
             // ============================================
             // STEP 6: HANDLE STATUS PENDING
-            // Kalau masih pending, kita log aja
-            // Status di database tetap "processing" (gak diubah)
-            // Digiflazz akan kirim callback lagi nanti
             // ============================================
             } else {
                 Log::info("Digiflazz callback with non-final status", [
@@ -170,12 +116,7 @@ class CallbackController extends Controller
                 ]);
             }
 
-            // Selalu return 200 ke Digiflazz
-            // Kalau kita return error, Digiflazz akan retry terus menerus
-            return response()->json([
-                "success" => true,
-                "message" => "Callback processed",
-            ], 200);
+            return response()->json(['success' => true, 'message' => 'Callback processed'], 200);
 
         } catch (Exception $e) {
             Log::error("Digiflazz callback processing failed", [
@@ -184,45 +125,31 @@ class CallbackController extends Controller
                 "payload" => $request->all(),
             ]);
 
-            // Tetap return 200 supaya Digiflazz gak retry
-            // Tapi log error biar kita tau ada masalah
-            return response()->json([
-                "success" => false,
-                "message" => "Callback processing failed",
-            ], 500);
+            // Tetap return 200 supaya Digiflazz tidak retry
+            return response()->json(['success' => false, 'message' => 'Callback processing failed'], 200);
         }
     }
 
     /**
-     * Send Success Email to Customer
-     * 
-     * PENJELASAN:
-     * - Dipanggil hanya saat order berhasil (status Sukses dari Digiflazz)
-     * - Email berisi: order ID, nama produk, nomor tujuan, total harga, SN
-     * - Template email: resources/views/emails/order-success.blade.php
-     * - Error pengiriman email TIDAK menggagalkan order (try-catch terpisah)
-     *   Kenapa? Karena order sudah sukses, email cuma notifikasi tambahan
-     * - Error email dicatat di log untuk debugging
-     * 
-     * @param Order $order
-     * @return void
+     * ✅ FIX B2: Dispatch email sukses ke queue menggunakan job yang sudah ada
+     *
+     * Sebelumnya: Mail::to()->send() — sync, bisa timeout, tidak ada retry
+     * Sekarang:   SendOrderSuccessEmail::dispatch() — async, retry 3x, tidak blocking
+     *
+     * Pastikan queue worker berjalan: php artisan queue:work
+     * Atau pakai supervisor di production untuk auto-restart worker
      */
-    private function sendSuccessEmail(Order $order): void
+    private function dispatchSuccessEmail(Order $order): void
     {
         try {
-            // Cari data produk berdasarkan SKU
-            // Dibutuhkan untuk template email (nama produk, harga, dll)
             $product = Product::where("sku", $order->sku)->first();
 
-            // Kalau produk gak ketemu, buat dummy product object
-            // Supaya email tetap bisa dikirim walau produk dihapus
+            // Kalau produk sudah dihapus, buat mock dari data order
             if (!$product) {
                 Log::warning("Product not found for email, using order data", [
                     "order_id" => $order->order_id,
                     "sku"      => $order->sku,
                 ]);
-
-                // Buat mock product dari data order
                 $product = new \App\Models\Product([
                     "name"          => $order->product_name,
                     "sku"           => $order->sku,
@@ -230,119 +157,83 @@ class CallbackController extends Controller
                 ]);
             }
 
-            // Kirim email menggunakan OrderSuccess Mailable
-            // Config email ada di .env: MAIL_HOST, MAIL_PORT, MAIL_USERNAME, dll
-            Mail::to($order->customer_email)
-                ->send(new OrderSuccess($order, $product));
+            // ✅ Dispatch ke queue — tidak blocking, retry 3x kalau gagal
+            SendOrderSuccessEmail::dispatch($order, $product);
 
-            Log::info("Success email sent to customer", [
+            Log::info("Success email dispatched to queue", [
                 "order_id" => $order->order_id,
                 "email"    => $order->customer_email,
                 "sn"       => $order->sn,
             ]);
 
-        } catch (Exception $mailException) {
-            // PENTING: Error email TIDAK throw exception ke parent
-            // Artinya: kalau email gagal kirim, order tetap SUCCESS
-            // Kita cuma log error-nya untuk debugging manual
-            Log::error("Failed to send success email", [
+        } catch (Exception $e) {
+            // Kalau dispatch gagal (queue tidak jalan), fallback ke sync
+            Log::error("Failed to dispatch success email to queue, falling back to sync", [
                 "order_id" => $order->order_id,
-                "email"    => $order->customer_email,
-                "error"    => $mailException->getMessage(),
-                "note"     => "Order status is still SUCCESS. Only email failed.",
+                "error"    => $e->getMessage(),
             ]);
+
+            // Fallback: kirim langsung tapi wrapped try-catch
+            try {
+                $product = $product ?? new \App\Models\Product([
+                    "name"          => $order->product_name,
+                    "sku"           => $order->sku,
+                    "selling_price" => $order->total_price,
+                ]);
+                Mail::to($order->customer_email)
+                    ->send(new \App\Mail\OrderSuccess($order, $product));
+            } catch (Exception $mailEx) {
+                Log::error("Sync fallback email also failed", [
+                    "order_id" => $order->order_id,
+                    "error"    => $mailEx->getMessage(),
+                    "note"     => "Order status is still SUCCESS. Only email failed.",
+                ]);
+            }
         }
     }
 
     /**
-     * Send Failed Email to Customer
-     * 
-     * PENJELASAN:
-     * - Dipanggil hanya saat order gagal (status Gagal dari Digiflazz)
-     * - Raw reason dari Digiflazz diterjemahkan dulu ke bahasa yang user-friendly
-     * - Template email: resources/views/emails/order-failed.blade.php
-     * - Error pengiriman email TIDAK mengubah status order (try-catch terpisah)
-     *   Kenapa? Karena order sudah FAILED, email cuma notifikasi tambahan
-     * - Error email dicatat di log untuk debugging
-     * 
-     * @param Order $order
-     * @param string|null $rawReason  Pesan error mentah dari Digiflazz
-     * @return void
+     * Send Failed Email — tetap sync karena ringan dan jarang terjadi
      */
     private function sendFailedEmail(Order $order, ?string $rawReason = null): void
     {
         try {
-            // Terjemahkan pesan error Digiflazz ke bahasa yang lebih customer-friendly
-            // Supaya customer gak bingung baca pesan teknikal dari provider
             $userFriendlyReason = $this->translateFailedReason($rawReason);
-
-            // Kirim email menggunakan OrderFailed Mailable
-            // Config email ada di .env: MAIL_HOST, MAIL_PORT, MAIL_USERNAME, dll
             Mail::to($order->customer_email)
                 ->send(new OrderFailed($order, $userFriendlyReason));
 
             Log::info("Failed email sent to customer", [
-                "order_id"          => $order->order_id,
-                "email"             => $order->customer_email,
-                "raw_reason"        => $rawReason,
-                "translated_reason" => $userFriendlyReason,
-            ]);
-
-        } catch (Exception $mailException) {
-            // PENTING: Error email TIDAK throw exception ke parent
-            // Artinya: kalau email gagal kirim, order tetap FAILED
-            // Kita cuma log error-nya untuk debugging manual
-            Log::error("Failed to send failed email", [
                 "order_id" => $order->order_id,
                 "email"    => $order->customer_email,
+            ]);
+        } catch (Exception $mailException) {
+            Log::error("Failed to send failed email", [
+                "order_id" => $order->order_id,
                 "error"    => $mailException->getMessage(),
                 "note"     => "Order status is still FAILED. Only email failed.",
             ]);
         }
     }
 
-    /**
-     * Translate Raw Digiflazz Error Reason to User-Friendly Message
-     * 
-     * PENJELASAN:
-     * - Pesan error dari Digiflazz kadang teknikal dan gak ramah untuk customer
-     * - Method ini menerjemahkan ke bahasa Indonesia yang lebih mudah dipahami
-     * - Pengecekan pakai keyword matching (str_contains) biar fleksibel
-     * - Kalau tidak ada keyword yang cocok, fallback ke pesan generic
-     * - Pesan asli dari Digiflazz tetap disimpan di log untuk debugging
-     * 
-     * @param string|null $reason  Pesan error mentah dari Digiflazz
-     * @return string               Pesan yang sudah diterjemahkan
-     */
     private function translateFailedReason(?string $reason): string
     {
-        if (!$reason) {
-            return "Terjadi kesalahan saat memproses pesanan Anda.";
-        }
+        if (!$reason) return 'Terjadi kesalahan saat memproses pesanan Anda.';
 
         $reason = strtolower($reason);
 
-        // Saldo Digiflazz habis / insufficient balance
-        if (str_contains($reason, "saldo") || str_contains($reason, "balance") || str_contains($reason, "insufficient")) {
-            return "Layanan sedang tidak tersedia untuk sementara. Silakan coba lagi nanti atau hubungi Customer Service.";
+        if (str_contains($reason, 'saldo') || str_contains($reason, 'balance') || str_contains($reason, 'insufficient')) {
+            return 'Layanan sedang tidak tersedia untuk sementara. Silakan coba lagi nanti atau hubungi Customer Service.';
+        }
+        if (str_contains($reason, 'nomor') || str_contains($reason, 'number') || str_contains($reason, 'destination')) {
+            return 'Nomor tujuan tidak valid. Pastikan nomor yang Anda masukkan sudah benar.';
+        }
+        if (str_contains($reason, 'sku') || str_contains($reason, 'produk') || str_contains($reason, 'product')) {
+            return 'Produk yang Anda pesan sedang tidak tersedia. Silakan pilih produk lain.';
+        }
+        if (str_contains($reason, 'timeout') || str_contains($reason, 'server') || str_contains($reason, 'connection')) {
+            return 'Koneksi ke server provider terputus. Silakan coba lagi dalam beberapa menit.';
         }
 
-        // Nomor tujuan tidak valid
-        if (str_contains($reason, "nomor") || str_contains($reason, "number") || str_contains($reason, "destination")) {
-            return "Nomor tujuan tidak valid. Pastikan nomor yang Anda masukkan sudah benar.";
-        }
-
-        // SKU / produk tidak valid atau tidak tersedia
-        if (str_contains($reason, "sku") || str_contains($reason, "produk") || str_contains($reason, "product")) {
-            return "Produk yang Anda pesan sedang tidak tersedia. Silakan pilih produk lain.";
-        }
-
-        // Timeout atau server error provider
-        if (str_contains($reason, "timeout") || str_contains($reason, "server") || str_contains($reason, "connection")) {
-            return "Koneksi ke server provider terputus. Silakan coba lagi dalam beberapa menit.";
-        }
-
-        // Fallback: pesan generic
-        return "Pesanan gagal diproses. Silakan coba lagi atau hubungi Customer Service kami.";
+        return 'Pesanan gagal diproses. Silakan coba lagi atau hubungi Customer Service kami.';
     }
 }

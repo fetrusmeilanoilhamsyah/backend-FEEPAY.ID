@@ -6,9 +6,7 @@ use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\MidtransPaymentController;
 use App\Http\Controllers\Api\CallbackController;
-use App\Http\Controllers\Api\UsdtExchangeController;
 use App\Http\Controllers\Api\ProductController;
-use App\Http\Controllers\Api\UsdtRateController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\SupportController;
 
@@ -43,7 +41,6 @@ Route::middleware('throttle:20,1')->group(function () {
     Route::post('/orders/create', [OrderController::class, 'store']);
     Route::post('/payments/submit', [PaymentController::class, 'submit']);
     Route::post('/payments/midtrans/create', [MidtransPaymentController::class, 'createPayment']);
-    Route::post('/usdt/submit', [UsdtExchangeController::class, 'submit']);
 });
 
 // ✅ Webhooks - Permissive but protected (100 per minute)
@@ -55,10 +52,7 @@ Route::middleware('throttle:100,1')->group(function () {
 // ✅ Read-only endpoints - Liberal rate limit (60 per minute)
 Route::middleware('throttle:60,1')->group(function () {
     Route::get('/products', [ProductController::class, 'index']);
-    // ✅ FIX H-06: Ganti GET ke POST, wajib kirim email untuk verifikasi
     Route::post('/orders/{orderId}', [OrderController::class, 'show']);
-    Route::get('/usdt/rate', [UsdtRateController::class, 'getCurrent']);
-    Route::get('/usdt/{trxId}', [UsdtExchangeController::class, 'show']);
     Route::get('/support/contacts', [SupportController::class, 'getContacts']);
 });
 
@@ -104,16 +98,6 @@ Route::prefix('admin/' . config('app.admin_path'))
             Route::get('/', [PaymentController::class, 'index']);
             Route::post('/{id}/verify', [PaymentController::class, 'verify']);
             Route::get('/{id}/proof', [PaymentController::class, 'downloadProof']);
-        });
-        
-        // USDT Exchange Management
-        Route::prefix('usdt')->group(function () {
-            Route::get('/', [UsdtExchangeController::class, 'index']);
-            Route::post('/{id}/approve', [UsdtExchangeController::class, 'approve']);
-            Route::post('/{id}/reject', [UsdtExchangeController::class, 'reject']);
-            Route::get('/{id}/proof', [UsdtExchangeController::class, 'downloadProof']);
-            Route::post('/rate', [UsdtRateController::class, 'update']);
-            Route::get('/rate/history', [UsdtRateController::class, 'history']);
         });
 
         // Products Management

@@ -9,46 +9,35 @@ class Product extends Model
 {
     use HasFactory;
 
-    /**
-     * Kolom yang boleh diisi (Mass Assignable)
-     * Ditambahkan 'is_active' agar bisa diupdate via Admin Dashboard
-     */
     protected $fillable = [
         'sku',
         'name',
         'category',
+        'brand',         // Kolom Baru
         'cost_price',
         'selling_price',
-        'is_active'
+        'status',        // Menggantikan is_active agar sinkron dengan Controller
+        'stock',         // Kolom Baru
+        'type'           // Kolom Baru untuk filter UI Game
     ];
 
-    /**
-     * Casting data agar formatnya sesuai saat keluar dari database
-     */
     protected $casts = [
         'cost_price' => 'decimal:2',
         'selling_price' => 'decimal:2',
-        'is_active' => 'boolean', // Penting agar frontend menerima true/false, bukan 0/1
     ];
 
-    /**
-     * Appends: Agar profit_margin otomatis muncul saat data dipanggil
-     */
     protected $appends = ['profit_margin'];
 
-    /**
-     * Accessor untuk menghitung Profit secara otomatis
-     */
     public function getProfitMarginAttribute(): float
     {
         return (float) ($this->selling_price - $this->cost_price);
     }
 
     /**
-     * Scope untuk filter kategori produk
+     * Scope untuk mempermudah filter di Controller
      */
-    public function scopeCategory($query, string $category)
+    public function scopeActive($query)
     {
-        return $query->where('category', $category);
+        return $query->where('status', 'active');
     }
 }

@@ -17,7 +17,7 @@ class SyncDigiflazz extends Command
     /**
      * The console command description.
      */
-    protected $description = 'Sync products from Digiflazz API to local database';
+    protected $description = 'Sync products from Digiflazz API to local database with price protection';
 
     /**
      * Execute the console command.
@@ -27,7 +27,7 @@ class SyncDigiflazz extends Command
         $this->info('🚀 Starting Digiflazz product sync...');
 
         try {
-            // Get credentials - Modified to have fallback to env() if config is empty
+            // Get credentials
             $username = config('services.digiflazz.username') ?? env('DIGIFLAZZ_USERNAME');
             $apiKey = config('services.digiflazz.api_key') ?? env('DIGIFLAZZ_API_KEY');
             $baseUrl = config('services.digiflazz.base_url') ?? env('DIGIFLAZZ_BASE_URL', 'https://api.digiflazz.com/v1');
@@ -37,7 +37,7 @@ class SyncDigiflazz extends Command
                 return 1;
             }
 
-            // Generate signature - Changed 'df' to 'pricelist' for production usage
+            // Generate signature
             $signature = md5($username . $apiKey . 'pricelist');
 
             // Prepare request payload
@@ -60,7 +60,6 @@ class SyncDigiflazz extends Command
 
             $data = $response->json();
 
-            // Check if API returned an error message (like Rate Limit or IP Block)
             if (isset($data['data']['message'])) {
                 $this->error('⚠️ Supplier Message: ' . $data['data']['message']);
                 return 1;
@@ -101,42 +100,56 @@ class SyncDigiflazz extends Command
 
             foreach ($products as $item) {
                 try {
-                    // Extract data from API response
                     $sku = $item['buyer_sku_code'] ?? null;
-                    $productName = $item['product_name'] ?? 'Unknown Product';
-                    $cat = $item['category'] ?? 'General';
-                    $brand = $item['brand'] ?? null;
-                    $modalPrice = $item['price'] ?? 0;
-                    
-                    // Selling price logic
-                    $sellingPrice = $modalPrice + $defaultMargin;
-                    
-                    $buyerProductStatus = $item['buyer_product_status'] ?? false;
-                    $sellerProductStatus = $item['seller_product_status'] ?? false;
-
-                    // Skip if no SKU
                     if (!$sku) {
                         $skippedCount++;
                         $bar->advance();
                         continue;
                     }
 
-                    // Determine status
+                    $productName = $item['product_name'] ?? 'Unknown Product';
+                    $cat = $item['category'] ?? 'General';
+                    $brand = $item['brand'] ?? null;
+                    $modalPrice = $item['price'] ?? 0;
+                    
+                    $buyerProductStatus = $item['buyer_product_status'] ?? false;
+                    $sellerProductStatus = $item['seller_product_status'] ?? false;
                     $status = ($buyerProductStatus && $sellerProductStatus) ? 'active' : 'inactive';
 
-                    // Update or create product
-                    Product::updateOrCreate(
-                        ['sku' => $sku],
-                        [
+                    // Cari produk lama berdasarkan SKU
+                    $existingProduct = Product::where('sku', $sku)->first();
+
+                    if ($existingProduct) {
+                        // LOGIKA UPGRADE: Gunakan harga jual lama
+                        $sellingPrice = $existingProduct->selling_price;
+
+                        // PROTEKSI RUGI: Jika harga modal baru naik melampaui harga jual lama,
+                        // paksa update harga jual menggunakan margin default agar tidak rugi.
+                        if ($modalPrice >= $sellingPrice) {
+                            $sellingPrice = $modalPrice + $defaultMargin;
+                        }
+
+                        $existingProduct->update([
                             'name' => $productName,
                             'category' => $cat,
                             'brand' => $brand,
                             'cost_price' => $modalPrice,
                             'selling_price' => $sellingPrice,
+                            'status' => $status,
+                        ]);
+                    } else {
+                        // Produk Baru: Buat dengan margin default
+                        Product::create([
+                            'sku' => $sku,
+                            'name' => $productName,
+                            'category' => $cat,
+                            'brand' => $brand,
+                            'cost_price' => $modalPrice,
+                            'selling_price' => $modalPrice + $defaultMargin,
                             'stock' => 'unlimited',
                             'status' => $status,
-                        ]
-                    );
+                        ]);
+                    }
 
                     $syncedCount++;
 

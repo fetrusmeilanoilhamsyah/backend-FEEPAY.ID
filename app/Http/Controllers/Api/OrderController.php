@@ -25,26 +25,20 @@ class OrderController extends Controller
     ) {}
 
     /**
-     * Store a new order (Guest checkout)
+     * Membuat Pesanan Baru (Mendukung Top Up Game & Standard)
      */
     public function store(StoreOrderRequest $request)
     {
         try {
-            // ✅ FIX M-03: Idempotency check — cegah double order dari spam klik
-            // Frontend kirim X-Idempotency-Key di setiap request (sudah ada di api.js)
+            // Idempotency check — cegah double order dari spam klik
             $idempotencyKey = $request->header('X-Idempotency-Key');
             if ($idempotencyKey) {
                 $cacheKey = 'idempotency:order:' . $idempotencyKey;
                 $cached = Cache::get($cacheKey);
                 if ($cached) {
-                    // Request duplikat — return order yang sama, jangan buat baru
-                    Log::info('Duplicate order request blocked', [
-                        'idempotency_key' => $idempotencyKey,
-                        'ip' => $request->ip(),
-                    ]);
                     return response()->json([
                         'success' => true,
-                        'message' => 'Order created',
+                        'message' => 'Order created (cached)',
                         'data' => $cached,
                     ], 201);
                 }
@@ -52,108 +46,104 @@ class OrderController extends Controller
 
             DB::beginTransaction();
 
-            $priceResponse = $this->digiflazzService->getProductPrice($request->sku);
+            // Ambil data produk terbaru dari DB Lokal (Hasil Sync)
+            $product = Product::where('sku', $request->sku)->first();
 
-            if (!$priceResponse['success']) {
-                return response()->json(['success' => false, 'message' => 'SKU tidak ditemukan'], 400);
+            if (!$product) {
+                return response()->json(['success' => false, 'message' => 'Produk tidak ditemukan atau sedang tidak aktif'], 400);
             }
 
-            $productData = $priceResponse['data'];
-            $costPrice = $productData['price'] ?? 0;
-            $sellingPrice = $costPrice + config('feepay.margin', 1000);
-
-            $product = Product::updateOrCreate(
-                ['sku' => $request->sku],
-                [
-                    'name' => $productData['product_name'] ?? 'Unknown Product',
-                    'category' => $productData['category'] ?? 'General',
-                    'cost_price' => $costPrice,
-                    'selling_price' => $sellingPrice,
-                ]
-            );
+            // Generate Order ID Unik
+            $orderId = 'FP' . strtoupper(Str::random(5)) . date('his');
 
             $order = Order::create([
-                'order_id' => 'FP' . strtoupper(Str::random(8)) . time(),
+                'order_id' => $orderId,
                 'sku' => $request->sku,
                 'product_name' => $product->name,
-                'target_number' => $request->target_number,
+                'target_number' => $request->target_number, // User ID Game atau No HP
+                'zone_id' => $request->zone_id, // KHUSUS GAME (Bisa null)
                 'customer_email' => $request->customer_email,
-                'total_price' => $sellingPrice,
+                'total_price' => $product->selling_price,
                 'status' => OrderStatus::PENDING->value,
             ]);
 
             DB::commit();
 
-            // ✅ FIX M-03: Simpan ke cache 24 jam — request duplikat return order yang sama
             if ($idempotencyKey) {
                 Cache::put($cacheKey, $order, now()->addHours(24));
             }
 
-            Log::info('Order Created', ['order_id' => $order->order_id]);
+            Log::info('Order Created successfully', ['order_id' => $order->order_id]);
 
-            return response()->json(['success' => true, 'message' => 'Order created', 'data' => $order], 201);
+            return response()->json(['success' => true, 'message' => 'Pesanan berhasil dibuat', 'data' => $order], 201);
 
         } catch (Exception $e) {
             DB::rollBack();
             Log::error('Order Store Failed', ['error' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Terjadi kesalahan sistem'], 500);
+            return response()->json(['success' => false, 'message' => 'Gagal membuat pesanan: ' . $e->getMessage()], 500);
         }
     }
 
     /**
-     * Confirm order & Auto-order Digiflazz (Admin)
+     * Konfirmasi Pesanan & Eksekusi ke Digiflazz (Admin Only)
      */
     public function confirm(ConfirmOrderRequest $request, int $id)
     {
         try {
             DB::beginTransaction();
 
-            $order = Order::with('payment')->lockForUpdate()->find($id);
+            $order = Order::lockForUpdate()->find($id);
 
-            if (!$order) return response()->json(['success' => false, 'message' => 'Order not found'], 404);
+            if (!$order) return response()->json(['success' => false, 'message' => 'Pesanan tidak ditemukan'], 404);
             
-            if ($order->status !== OrderStatus::PENDING->value) {
-                return response()->json(['success' => false, 'message' => 'Order already processed'], 400);
+            if ($order->status !== OrderStatus::PENDING) {
+                return response()->json(['success' => false, 'message' => 'Pesanan sudah diproses sebelumnya'], 400);
             }
 
-            $digiflazz = $this->digiflazzService->placeOrder($order->sku, $order->target_number, $order->order_id);
+            // Gabungkan UserID + ZoneID jika ini adalah produk Game (Aturan Digiflazz)
+            $target = $order->target_number;
+            if ($order->zone_id) {
+                $target = $order->target_number . $order->zone_id;
+            }
+
+            // Kirim ke Digiflazz
+            $digiflazz = $this->digiflazzService->placeOrder($order->sku, $target, $order->order_id);
 
             if (!$digiflazz['success']) {
-                $order->update(['status' => OrderStatus::FAILED->value]);
-                $order->logStatusChange(OrderStatus::FAILED, 'Digiflazz Error: ' . $digiflazz['message'], $request->user()->id);
+                $order->markAsFailed($request->user()->id, 'Digiflazz: ' . $digiflazz['message']);
                 DB::commit();
                 return response()->json(['success' => false, 'message' => $digiflazz['message']], 400);
             }
 
             $apiData = $digiflazz['data'];
 
+            // Update status ke PROCESSING (Enum baru dari Migration)
             $order->update([
-                'status' => OrderStatus::PROCESSING->value,
+                'status' => OrderStatus::PROCESSING,
                 'sn' => $apiData['sn'] ?? '-',
                 'confirmed_by' => $request->user()->id,
                 'confirmed_at' => now(),
             ]);
 
-            $order->logStatusChange(OrderStatus::PROCESSING, 'Order submitted to Digiflazz', $request->user()->id);
+            $order->logStatusChange(OrderStatus::PROCESSING, 'Berhasil diteruskan ke provider', $request->user()->id);
 
             DB::commit();
-            return response()->json(['success' => true, 'message' => 'Order processed to Digiflazz', 'sn' => $order->sn], 200);
+            return response()->json(['success' => true, 'message' => 'Pesanan sedang diproses provider', 'sn' => $order->sn], 200);
 
         } catch (Exception $e) {
             DB::rollBack();
             Log::error('Confirm Order Failed', ['error' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Terjadi kesalahan sistem'], 500);
+            return response()->json(['success' => false, 'message' => 'Sistem gagal memproses konfirmasi'], 500);
         }
     }
 
     /**
-     * Sinkronisasi Status dengan Digiflazz API
+     * Sinkronisasi Status Order (Cek berkala ke Digiflazz)
      */
     public function syncStatus($orderId)
     {
         try {
             $order = Order::where('order_id', $orderId)->firstOrFail();
-            
             $result = $this->digiflazzService->checkOrderStatus($order->order_id);
 
             if ($result['success']) {
@@ -166,31 +156,27 @@ class OrderController extends Controller
                     default => OrderStatus::PROCESSING,
                 };
 
-                if ($order->status !== $newStatus->value) {
+                if ($order->status !== $newStatus) {
                     $order->update([
-                        'status' => $newStatus->value,
+                        'status' => $newStatus,
                         'sn' => $apiData['sn'] ?? $order->sn
                     ]);
                     
-                    $order->logStatusChange($newStatus, "Sync Status: " . ($apiData['message'] ?? 'Synced'));
+                    $order->logStatusChange($newStatus, "Update otomatis dari provider");
 
                     if ($newStatus === OrderStatus::SUCCESS) {
                         try {
-                            $product = Product::where('sku', $order->sku)->first();
-                            Mail::to($order->customer_email)->send(new OrderSuccess($order, $product));
+                            Mail::to($order->customer_email)->send(new OrderSuccess($order));
                         } catch (Exception $mailEx) {
-                            Log::error('Email Sync Failed', ['error' => $mailEx->getMessage()]);
+                            Log::error('Email Notification Failed', ['error' => $mailEx->getMessage()]);
                         }
                     }
                 }
-
-                return response()->json(['success' => true, 'message' => 'Status Updated to ' . $newStatus->value, 'status' => $newStatus->value]);
+                return response()->json(['success' => true, 'message' => 'Status diperbarui', 'status' => $order->status]);
             }
-            
             return response()->json(['success' => false, 'message' => $result['message']], 400);
-
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => 'Terjadi kesalahan sistem'], 500);
+            return response()->json(['success' => false, 'message' => 'Gagal sinkronisasi status'], 500);
         }
     }
 
@@ -199,28 +185,13 @@ class OrderController extends Controller
         return response()->json(['success' => true, 'data' => Order::orderBy('created_at', 'desc')->paginate(50)]);
     }
 
-    /**
-     * Show order by ID
-     * ✅ FIX H-06: Verifikasi email sebelum return data order
-     */
     public function show(Request $request, string $orderId)
     {
-        $request->validate([
-            'email' => 'required|email',
-        ]);
-
+        $request->validate(['email' => 'required|email']);
         $order = Order::where('order_id', $orderId)->first();
 
-        if (!$order) {
-            return response()->json(['success' => false, 'message' => 'Order not found'], 404);
-        }
-
-        if (strtolower($request->email) !== strtolower($order->customer_email)) {
-            Log::warning('IDOR attempt - wrong email for order', [
-                'order_id' => $orderId,
-                'ip' => $request->ip(),
-            ]);
-            return response()->json(['success' => false, 'message' => 'Order not found'], 404);
+        if (!$order || strtolower($request->email) !== strtolower($order->customer_email)) {
+            return response()->json(['success' => false, 'message' => 'Pesanan tidak ditemukan'], 404);
         }
 
         return response()->json(['success' => true, 'data' => $order]);

@@ -13,11 +13,15 @@ return new class extends Migration
             $table->string('sku')->unique();
             $table->string('name');
             $table->string('category');
+            $table->string('brand')->nullable(); // Penting untuk filter Game
             $table->decimal('cost_price', 15, 2);
             $table->decimal('selling_price', 15, 2);
+            $table->string('status')->default('active');
+            $table->string('stock')->default('unlimited');
+            $table->string('type')->default('standard'); // Untuk bedakan UI Game/Pulsa
             $table->timestamps();
 
-            $table->index('category');
+            $table->index(['category', 'brand', 'status']);
             $table->index('sku');
         });
     }
