@@ -5,6 +5,7 @@ namespace App\Services;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use App\Models\Product;
+use App\Services\TelegramService; // Baris Baru: Panggil Kurir Tele
 use Exception;
 
 class DigiflazzService
@@ -146,6 +147,23 @@ class DigiflazzService
 
             $data = $response->json();
 
+            // Cek jika status dari JSON response adalah Gagal (Misal: RC 69 atau Saldo Habis)
+            if (isset($data['data']['status']) && $data['data']['status'] === 'Gagal') {
+                $pesanGagal = $data['data']['message'] ?? 'Alasan tidak diketahui';
+                
+                // NOTIFIKASI TELEGRAM: Pesanan ditolak Digiflazz
+                TelegramService::notify("
+⚠️ *DANGER: DIGIFLAZZ REJECTED*
+----------------------------------
+*Order ID:* #$refId
+*SKU:* $sku
+*Target:* $targetNumber
+*Pesan:* _" . $pesanGagal . "_
+----------------------------------
+_Laporan otomatis FEEPAY.ID_
+                ");
+            }
+
             Log::info('Digiflazz order placed', [
                 'ref_id' => $refId,
                 'sku' => $sku,
@@ -164,6 +182,9 @@ class DigiflazzService
                 'sku' => $sku,
                 'ref_id' => $refId,
             ]);
+
+            // NOTIFIKASI TELEGRAM: Sistem atau API Down
+            TelegramService::notify("🚨 *SYSTEM ERROR:* Gagal menembak API Digiflazz untuk Order #$refId. Cek Log!");
 
             return [
                 'success' => false,
@@ -221,12 +242,6 @@ class DigiflazzService
 
     /**
      * Get account balance from Digiflazz
-     * 
-     * ✅ FIX: Signature cek saldo WAJIB pakai 'depo' bukan 'df'
-     * Aturan Digiflazz:
-     * - Price list  → MD5(username + apiKey + 'df')
-     * - Cek saldo   → MD5(username + apiKey + 'depo')  ← BEDA!
-     * - Transaksi   → MD5(username + apiKey + ref_id)
      */
     public function getBalance(): array
     {
@@ -234,7 +249,6 @@ class DigiflazzService
             $payload = [
                 'cmd' => 'deposit',
                 'username' => $this->username,
-                // ✅ FIX: Pakai 'depo' bukan $this->signature ('df')
                 'sign' => md5($this->username . $this->apiKey . 'depo'),
             ];
 
@@ -246,10 +260,22 @@ class DigiflazzService
             }
 
             $data = $response->json();
+            $balance = $data['data']['deposit'] ?? 0;
 
             Log::info('Digiflazz balance fetched', [
-                'balance' => $data['data']['deposit'] ?? 0,
+                'balance' => $balance,
             ]);
+
+            // ALERT TELEGRAM: Jika saldo di bawah 100.000
+            if ($balance < 100000) {
+                TelegramService::notify("
+💸 *WARNING: SALDO TIPIS!*
+----------------------------------
+*Sisa Saldo:* Rp " . number_format($balance, 0, ',', '.') . "
+----------------------------------
+_Segera Top Up saldo Digiflazz kamu agar transaksi FEEPAY.ID tetap lancar!_
+                ");
+            }
 
             return [
                 'success' => true,
