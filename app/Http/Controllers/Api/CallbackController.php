@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Enums\OrderStatus;
 use App\Jobs\SendOrderSuccessEmail;
 use App\Mail\OrderFailed;
+use App\Services\TelegramService; // Baris Baru: Untuk Notif Tele
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -62,9 +63,6 @@ class CallbackController extends Controller
 
             // ============================================
             // STEP 4: HANDLE STATUS SUKSES
-            // ✅ FIX B2: Ganti Mail::send() langsung ke dispatch(job)
-            // Alasan: Mail::send() sync bisa timeout → Digiflazz retry berkali-kali
-            // SendOrderSuccessEmail job: tries=3, timeout=60, implements ShouldQueue
             // ============================================
             if ($status === "Sukses") {
                 $order->update([
@@ -82,8 +80,10 @@ class CallbackController extends Controller
                     "sn"       => $sn,
                 ]);
 
-                // ✅ FIX B2: Dispatch ke queue, bukan Mail::send() langsung
-                // Job akan retry 3x kalau gagal (Brevo limit, timeout, dll)
+                // Kirim Notifikasi ke Telegram Admin
+                $this->sendTelegramNotification($order, 'SUKSES', $sn);
+
+                // ✅ FIX B2: Dispatch ke queue
                 $this->dispatchSuccessEmail($order);
 
             // ============================================
@@ -102,7 +102,10 @@ class CallbackController extends Controller
                     "message"  => $message,
                 ]);
 
-                // Email gagal tetap sync karena lebih ringan dan tidak blocking
+                // Kirim Notifikasi ke Telegram Admin
+                $this->sendTelegramNotification($order, 'GAGAL', null, $message);
+
+                // Email gagal tetap sync
                 $this->sendFailedEmail($order, $message);
 
             // ============================================
@@ -125,26 +128,50 @@ class CallbackController extends Controller
                 "payload" => $request->all(),
             ]);
 
-            // Tetap return 200 supaya Digiflazz tidak retry
             return response()->json(['success' => false, 'message' => 'Callback processing failed'], 200);
         }
     }
 
     /**
-     * ✅ FIX B2: Dispatch email sukses ke queue menggunakan job yang sudah ada
-     *
-     * Sebelumnya: Mail::to()->send() — sync, bisa timeout, tidak ada retry
-     * Sekarang:   SendOrderSuccessEmail::dispatch() — async, retry 3x, tidak blocking
-     *
-     * Pastikan queue worker berjalan: php artisan queue:work
-     * Atau pakai supervisor di production untuk auto-restart worker
+     * BARIS BARU: Fungsi untuk kirim notifikasi Telegram
+     */
+    private function sendTelegramNotification(Order $order, string $status, ?string $sn = null, ?string $reason = null): void
+    {
+        $emoji = ($status === 'SUKSES') ? '✅' : '❌';
+        $nominal = number_format($order->total_price, 0, ',', '.');
+        
+        $pesan = "
+*NOTIFIKASI TRANSAKSI FEEPAY* $emoji
+----------------------------------
+*Status:* $status
+*Produk:* {$order->product_name}
+*Nominal:* Rp $nominal
+*Pembeli:* {$order->customer_email}
+*Order ID:* #{$order->order_id}";
+
+        if ($sn) {
+            $pesan .= "\n*SN:* `{$sn}`";
+        }
+        
+        if ($reason) {
+            $pesan .= "\n*Alasan:* $reason";
+        }
+
+        $pesan .= "
+----------------------------------
+_Laporan otomatis sistem FEEPAY.ID_";
+
+        TelegramService::notify($pesan);
+    }
+
+    /**
+     * Dispatch email sukses ke queue
      */
     private function dispatchSuccessEmail(Order $order): void
     {
         try {
             $product = Product::where("sku", $order->sku)->first();
 
-            // Kalau produk sudah dihapus, buat mock dari data order
             if (!$product) {
                 Log::warning("Product not found for email, using order data", [
                     "order_id" => $order->order_id,
@@ -157,23 +184,19 @@ class CallbackController extends Controller
                 ]);
             }
 
-            // ✅ Dispatch ke queue — tidak blocking, retry 3x kalau gagal
             SendOrderSuccessEmail::dispatch($order, $product);
 
             Log::info("Success email dispatched to queue", [
                 "order_id" => $order->order_id,
                 "email"    => $order->customer_email,
-                "sn"       => $order->sn,
             ]);
 
         } catch (Exception $e) {
-            // Kalau dispatch gagal (queue tidak jalan), fallback ke sync
             Log::error("Failed to dispatch success email to queue, falling back to sync", [
                 "order_id" => $order->order_id,
                 "error"    => $e->getMessage(),
             ]);
 
-            // Fallback: kirim langsung tapi wrapped try-catch
             try {
                 $product = $product ?? new \App\Models\Product([
                     "name"          => $order->product_name,
@@ -186,14 +209,13 @@ class CallbackController extends Controller
                 Log::error("Sync fallback email also failed", [
                     "order_id" => $order->order_id,
                     "error"    => $mailEx->getMessage(),
-                    "note"     => "Order status is still SUCCESS. Only email failed.",
                 ]);
             }
         }
     }
 
     /**
-     * Send Failed Email — tetap sync karena ringan dan jarang terjadi
+     * Send Failed Email
      */
     private function sendFailedEmail(Order $order, ?string $rawReason = null): void
     {
@@ -210,11 +232,13 @@ class CallbackController extends Controller
             Log::error("Failed to send failed email", [
                 "order_id" => $order->order_id,
                 "error"    => $mailException->getMessage(),
-                "note"     => "Order status is still FAILED. Only email failed.",
             ]);
         }
     }
 
+    /**
+     * Translate Failed Reason
+     */
     private function translateFailedReason(?string $reason): string
     {
         if (!$reason) return 'Terjadi kesalahan saat memproses pesanan Anda.';
