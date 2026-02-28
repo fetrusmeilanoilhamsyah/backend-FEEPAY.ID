@@ -90,7 +90,7 @@ class DigiflazzService
 
     /**
      * Place order to Digiflazz
-     * DIUBAH: Menggunakan pesan error dinamis agar laporan Telegram akurat.
+     * FIXED: Mendeteksi error provider meskipun API return non-200.
      */
     public function placeOrder(string $sku, string $targetNumber, string $refId): array
     {
@@ -104,16 +104,12 @@ class DigiflazzService
             ];
 
             $response = Http::timeout(60)->post("{$this->baseUrl}/transaction", $payload);
-
-            if (!$response->successful()) {
-                throw new Exception('Koneksi API Gagal: ' . $response->body());
-            }
-
             $data = $response->json();
 
-            // Handling Respon "Gagal" dari Digiflazz (Contoh: Saldo Habis, Harga Salah)
-            if (isset($data['data']['status']) && $data['data']['status'] === 'Gagal') {
-                $pesanGagal = $data['data']['message'] ?? 'Alasan tidak diketahui';
+            // 1. Cek jika API Gagal/Ditolak Provider (Termasuk Saldo Habis)
+            if ($response->failed() || (isset($data['data']['status']) && $data['data']['status'] === 'Gagal')) {
+                
+                $pesanGagal = $data['data']['message'] ?? 'Koneksi API Gagal';
                 
                 TelegramService::notify("
 ⚠️ *DIGIFLAZZ REJECTED*
@@ -125,8 +121,15 @@ class DigiflazzService
 ----------------------------------
 _Laporan otomatis FEEPAY.ID_
                 ");
+
+                return [
+                    'success' => false,
+                    'message' => $pesanGagal,
+                    'data' => $data['data'] ?? null
+                ];
             }
 
+            // 2. Jika Berhasil (Sedang Diproses)
             Log::info('Digiflazz order placed', ['ref_id' => $refId, 'sku' => $sku, 'response' => $data]);
 
             return [
@@ -137,7 +140,7 @@ _Laporan otomatis FEEPAY.ID_
         } catch (Exception $e) {
             Log::error('Digiflazz placeOrder error', ['message' => $e->getMessage(), 'sku' => $sku, 'ref_id' => $refId]);
 
-            // DIUBAH: Pesan Telegram sekarang dinamis mengikuti error asli ($e->getMessage())
+            // Benar-benar System Error (Kodingan/Jaringan VPS)
             TelegramService::notify("
 🚨 *SYSTEM ERROR*
 ----------------------------------
