@@ -9,12 +9,12 @@ class TelegramService
 {
     public static function notify($message)
     {
-        $token = env('TELEGRAM_BOT_TOKEN');
-        $chatId = env('TELEGRAM_CHAT_ID');
+        // Menggunakan config lebih stabil daripada env langsung
+        $token = config('services.telegram.bot_token');
+        $chatId = config('services.telegram.chat_id');
 
-        // Cek apakah data di .env terbaca
         if (!$token || !$chatId) {
-            Log::error("Telegram Notif Gagal: Variabel .env tidak ditemukan.");
+            Log::error("Telegram Notif Gagal: Token/ID belum diatur di config/services.php");
             return;
         }
 
@@ -25,13 +25,9 @@ class TelegramService
                 'parse_mode' => 'Markdown',
             ]);
 
-            // Catat hasil balasan dari Telegram ke log
             if ($response->failed()) {
                 Log::error("Telegram API Error: " . $response->body());
-            } else {
-                Log::info("Telegram Notif Berhasil Terkirim!");
             }
-            
         } catch (\Exception $e) {
             Log::error("Telegram Exception: " . $e->getMessage());
         }
