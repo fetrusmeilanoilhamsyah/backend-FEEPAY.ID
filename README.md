@@ -222,7 +222,142 @@ Template email responsif dikirim ke member secara otomatis via Laravel Queue:
 
 ---
 
-### 8. 🌙 Dark Mode
+### 8. 📡 Telegram Admin Alerts & Monitoring System
+
+Selain menerima tiket CS dari member, sistem juga mengirim **notifikasi otomatis ke admin** untuk setiap event penting yang terjadi di backend — tanpa admin perlu buka dashboard.
+
+#### 🔔 Notifikasi Status Transaksi
+Setiap perubahan status transaksi langsung dikirim ke Telegram admin secara real-time:
+
+**Processing:**
+```
+⏳ TRANSAKSI DIPROSES - FEEPAY.ID
+
+🗒️ Order ID  : TRX-20260301-042
+📦 Produk   : Pulsa Telkomsel 50.000
+👤 Member   : fee | 08123456789
+💰 Nominal  : Rp 52.000
+📡 Provider : Digiflazz
+
+🕐 Waktu    : 01 Mar 2026 14:32:10 WIB
+```
+
+**Success:**
+```
+✅ TRANSAKSI BERHASIL - FEEPAY.ID
+
+🗒️ Order ID  : TRX-20260301-042
+📦 Produk   : Pulsa Telkomsel 50.000
+👤 Member   : fee | 08123456789
+💰 Nominal  : Rp 52.000
+🔑 SN/Token : [terisi otomatis dari provider]
+
+🕐 Waktu    : 01 Mar 2026 14:32:18 WIB
+```
+
+**Failed:**
+```
+❌ TRANSAKSI GAGAL - FEEPAY.ID
+
+🗒️ Order ID  : TRX-20260301-043
+📦 Produk   : Pulsa XL 25.000
+👤 Member   : sfs | 08198765432
+💰 Nominal  : Rp 26.500
+⚠️ Alasan   : Nomor tujuan tidak valid
+
+🕐 Waktu    : 01 Mar 2026 14:35:02 WIB
+```
+
+---
+
+#### 🚫 Provider Rejection Handling
+Deteksi dini jika Digiflazz menolak pesanan karena alasan tertentu. Admin langsung tahu tanpa harus cek satu per satu:
+
+```
+🚫 PESANAN DITOLAK PROVIDER - FEEPAY.ID
+
+🗒️ Order ID  : TRX-20260301-044
+📦 Produk   : Token PLN 100.000
+👤 Member   : dvsdvsv | 0808123456
+
+❗ Alasan Penolakan:
+   Saldo Digiflazz tidak mencukupi
+   [atau: Harga produk tidak sesuai]
+   [atau: Nomor tujuan tidak ditemukan]
+
+⚡ Tindakan : Transaksi otomatis di-refund
+🕐 Waktu    : 01 Mar 2026 15:10:44 WIB
+```
+
+Kemungkinan alasan penolakan yang dideteksi sistem:
+- **Saldo habis** — Saldo Digiflazz tidak mencukupi untuk eksekusi order
+- **Harga tidak sesuai** — Harga produk berubah dari sisi provider
+- **Nomor tujuan salah** — ID/nomor target tidak valid atau tidak ditemukan
+
+---
+
+#### 🔴 System Failure Recovery Alert
+Alert otomatis jika terjadi kegagalan koneksi API atau error kritis di server:
+
+```
+🔴 SYSTEM ERROR - FEEPAY.ID
+
+🖥️ Komponen : Digiflazz API
+❗ Error     : Connection timeout (30s)
+🗒️ Order ID  : TRX-20260301-045
+📋 Detail   : Failed to connect after 3 retries
+
+⚙️ Status   : Job masuk antrean retry otomatis
+🕐 Waktu    : 01 Mar 2026 16:02:11 WIB
+```
+
+Sistem akan otomatis mencoba retry sebelum menyerah dan mengirim alert ini ke admin.
+
+---
+
+#### 🟡 Low Balance Monitoring
+Peringatan otomatis ketika saldo Digiflazz menyentuh batas minimum (threshold) yang ditentukan:
+
+```
+⚠️ PERINGATAN SALDO MENIPIS - FEEPAY.ID
+
+💳 Saldo Saat Ini : Rp 87.500
+🚨 Batas Minimum  : Rp 100.000
+
+❗ Saldo berada di bawah threshold!
+   Segera lakukan top-up saldo Digiflazz
+   untuk menghindari kegagalan transaksi.
+
+🕐 Waktu          : 01 Mar 2026 18:00:03 WIB
+```
+
+Threshold dapat dikonfigurasi melalui `.env`:
+```env
+DIGIFLAZZ_LOW_BALANCE_THRESHOLD=100000
+```
+
+---
+
+#### 📧 Asynchronous Email Notifications
+Email bukti transaksi ke member **tidak dikirim secara langsung** saat request berlangsung. Pengiriman dilempar ke **Laravel Queue** agar response API tetap cepat dan ringan:
+
+```
+Transaksi selesai
+      ↓
+Job email di-dispatch ke Queue (non-blocking)
+      ↓
+API langsung response ke member ← cepat ✅
+      ↓
+Queue Worker memproses email di background
+      ↓
+Email terkirim ke member (sukses / gagal)
+```
+
+Ini memastikan pengalaman member tetap responsif meskipun server email sedang lambat.
+
+---
+
+### 9. 🌙 Dark Mode
 Antarmuka mendukung mode gelap. Member dapat beralih antara Light Mode dan Dark Mode kapan saja melalui ikon di pojok kanan atas.
 
 ---
@@ -554,6 +689,10 @@ MAIL_PASSWORD=app_password_gmail   # Buat di: myaccount.google.com/apppasswords
 MAIL_ENCRYPTION=tls
 MAIL_FROM_ADDRESS=emailanda@gmail.com
 MAIL_FROM_NAME="FEEPAY.ID"
+
+# ─── Queue ────────────────────────────────────────────────────
+# ─── Monitoring & Alert ──────────────────────────────────────
+DIGIFLAZZ_LOW_BALANCE_THRESHOLD=100000  # Alert jika saldo di bawah nilai ini (Rupiah)
 
 # ─── Queue ────────────────────────────────────────────────────
 QUEUE_CONNECTION=database
