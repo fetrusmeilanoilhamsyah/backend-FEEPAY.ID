@@ -11,61 +11,25 @@ class Order extends Model
     use HasFactory;
 
     protected $fillable = [
-        'order_id',
-        'sku',
-        'product_name',
-        'target_number',
-        'zone_id',          // Tambahan untuk Game
-        'customer_email',
-        'total_price',
-        'status',
-        'sn',
-        'payment_id',
-        'confirmed_by',
-        'confirmed_at',
-        
-        // Midtrans fields
-        'midtrans_snap_token',
-        'midtrans_transaction_id',
-        'midtrans_payment_type',
-        'midtrans_transaction_status',
-        'midtrans_transaction_time',
+        'order_id', 'sku', 'product_name', 'target_number', 'zone_id',
+        'customer_email', 'total_price', 'status', 'sn', 'payment_id',
+        'confirmed_by', 'confirmed_at', 'midtrans_snap_token',
+        'midtrans_transaction_id', 'midtrans_payment_type',
+        'midtrans_transaction_status', 'midtrans_transaction_time',
     ];
 
     protected $casts = [
         'total_price' => 'decimal:2',
-        'status' => OrderStatus::class, // Menggunakan Enum OrderStatus Anda
+        'status' => OrderStatus::class,
         'confirmed_at' => 'datetime',
         'midtrans_transaction_time' => 'datetime',
     ];
 
-    /**
-     * Relasi ke sistem pembayaran
-     */
-    public function payment()
-    {
-        return $this->belongsTo(Payment::class);
+    public function statusHistories() 
+    { 
+        return $this->hasMany(OrderStatusHistory::class); 
     }
 
-    /**
-     * Relasi ke admin yang konfirmasi
-     */
-    public function confirmedBy()
-    {
-        return $this->belongsTo(User::class, 'confirmed_by');
-    }
-
-    /**
-     * History status pesanan
-     */
-    public function statusHistories()
-    {
-        return $this->hasMany(OrderStatusHistory::class);
-    }
-
-    /**
-     * Mencatat setiap perubahan status ke tabel history
-     */
     public function logStatusChange(OrderStatus $status, ?string $note = null, ?int $userId = null): void
     {
         OrderStatusHistory::create([
@@ -76,14 +40,29 @@ class Order extends Model
         ]);
     }
 
-    // Helper Status
-    public function isPaid(): bool
-    {
-        return in_array($this->midtrans_transaction_status, ['capture', 'settlement']);
+    public function hasMidtransToken(): bool 
+    { 
+        return !empty($this->midtrans_snap_token); 
     }
 
-    public function isProcessing(): bool
-    {
-        return $this->status === OrderStatus::PROCESSING;
+    // --- QUERY SCOPES UNTUK STATISTIK DASHBOARD ADMIN ---
+    public function scopePending($query) 
+    { 
+        return $query->where('status', 'pending'); 
+    }
+
+    public function scopeProcessing($query) 
+    { 
+        return $query->where('status', 'processing'); 
+    }
+
+    public function scopeSuccess($query) 
+    { 
+        return $query->where('status', 'success'); 
+    }
+
+    public function scopeFailed($query) 
+    { 
+        return $query->where('status', 'failed'); 
     }
 }
