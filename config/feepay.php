@@ -7,7 +7,7 @@ return [
     | Profit Margin
     |--------------------------------------------------------------------------
     |
-    | Default profit margin to add to cost price (in IDR)
+    | Margin keuntungan default yang ditambahkan ke harga modal (dalam IDR).
     |
     */
 
@@ -15,12 +15,15 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Admin PIN
+    | Admin Security Configuration
     |--------------------------------------------------------------------------
     |
-    | 6-digit PIN for admin actions (confirm orders, approve USDT)
+    | PIN 6 digit untuk aksi administratif seperti konfirmasi pesanan manual.
+    | Prefix path digunakan untuk mengamankan URL Dashboard Admin.
     |
     */
+
+    'admin_path' => env('ADMIN_PATH_PREFIX', 'admin-secret'),
 
     'admin_pin' => env('FEEPAY_ADMIN_PIN', '123456'),
 
