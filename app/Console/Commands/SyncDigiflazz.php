@@ -28,28 +28,28 @@ class SyncDigiflazz extends Command
 
         try {
             // Get credentials
-            $username = config('services.digiflazz.username') ?? env('DIGIFLAZZ_USERNAME');
-            $apiKey = config('services.digiflazz.api_key') ?? env('DIGIFLAZZ_API_KEY');
-            $baseUrl = config('services.digiflazz.base_url') ?? env('DIGIFLAZZ_BASE_URL', 'https://api.digiflazz.com/v1');
+            $username = config('services.digiflazz.username');
+            $apiKey   = config('services.digiflazz.api_key');
+            $baseUrl  = config('services.digiflazz.base_url', 'https://api.digiflazz.com/v1');
 
             if (!$username || !$apiKey) {
                 $this->error('❌ Digiflazz credentials not found! Check your .env file.');
                 return 1;
             }
 
-            // Generate signature
-            $signature = md5($username . $apiKey . 'pricelist');
+            // ✅ FIXED: 'pricelist' → 'df'
+            $signature = md5($username . $apiKey . 'df');
 
             // Prepare request payload
             $payload = [
-                'cmd' => 'prepaid',
+                'cmd'      => 'prepaid',
                 'username' => $username,
-                'sign' => $signature,
+                'sign'     => $signature,
             ];
 
             // Call Digiflazz API
             $this->info('📡 Fetching products from Digiflazz API...');
-            
+
             $response = Http::timeout(60)
                 ->post("{$baseUrl}/price-list", $payload);
 
@@ -75,8 +75,8 @@ class SyncDigiflazz extends Command
 
             // Filter by category if provided
             if ($category) {
-                $products = array_filter($products, function($item) use ($category) {
-                    return isset($item['category']) && 
+                $products = array_filter($products, function ($item) use ($category) {
+                    return isset($item['category']) &&
                            strtolower($item['category']) === strtolower($category);
                 });
                 $this->info("🔍 Filtered to category: {$category}");
@@ -94,8 +94,8 @@ class SyncDigiflazz extends Command
             $bar = $this->output->createProgressBar($totalProducts);
             $bar->start();
 
-            $syncedCount = 0;
-            $skippedCount = 0;
+            $syncedCount   = 0;
+            $skippedCount  = 0;
             $defaultMargin = config('feepay.margin', 2000);
 
             foreach ($products as $item) {
@@ -107,16 +107,14 @@ class SyncDigiflazz extends Command
                         continue;
                     }
 
-                    $productName = $item['product_name'] ?? 'Unknown Product';
-                    $cat = $item['category'] ?? 'General';
-                    $brand = $item['brand'] ?? null;
-                    $modalPrice = $item['price'] ?? 0;
-                    
-                    $buyerProductStatus = $item['buyer_product_status'] ?? false;
+                    $productName         = $item['product_name'] ?? 'Unknown Product';
+                    $cat                 = $item['category'] ?? 'General';
+                    $brand               = $item['brand'] ?? null;
+                    $modalPrice          = $item['price'] ?? 0;
+                    $buyerProductStatus  = $item['buyer_product_status'] ?? false;
                     $sellerProductStatus = $item['seller_product_status'] ?? false;
-                    $status = ($buyerProductStatus && $sellerProductStatus) ? 'active' : 'inactive';
+                    $status              = ($buyerProductStatus && $sellerProductStatus) ? 'active' : 'inactive';
 
-                    // Cari produk lama berdasarkan SKU
                     $existingProduct = Product::where('sku', $sku)->first();
 
                     if ($existingProduct) {
@@ -130,24 +128,24 @@ class SyncDigiflazz extends Command
                         }
 
                         $existingProduct->update([
-                            'name' => $productName,
-                            'category' => $cat,
-                            'brand' => $brand,
-                            'cost_price' => $modalPrice,
+                            'name'          => $productName,
+                            'category'      => $cat,
+                            'brand'         => $brand,
+                            'cost_price'    => $modalPrice,
                             'selling_price' => $sellingPrice,
-                            'status' => $status,
+                            'status'        => $status,
                         ]);
                     } else {
                         // Produk Baru: Buat dengan margin default
                         Product::create([
-                            'sku' => $sku,
-                            'name' => $productName,
-                            'category' => $cat,
-                            'brand' => $brand,
-                            'cost_price' => $modalPrice,
+                            'sku'           => $sku,
+                            'name'          => $productName,
+                            'category'      => $cat,
+                            'brand'         => $brand,
+                            'cost_price'    => $modalPrice,
                             'selling_price' => $modalPrice + $defaultMargin,
-                            'stock' => 'unlimited',
-                            'status' => $status,
+                            'stock'         => 'unlimited',
+                            'status'        => $status,
                         ]);
                     }
 
@@ -155,7 +153,7 @@ class SyncDigiflazz extends Command
 
                 } catch (\Exception $e) {
                     Log::error('Failed to sync product', [
-                        'sku' => $sku ?? 'unknown',
+                        'sku'   => $sku ?? 'unknown',
                         'error' => $e->getMessage(),
                     ]);
                     $skippedCount++;
@@ -167,7 +165,6 @@ class SyncDigiflazz extends Command
             $bar->finish();
             $this->newLine(2);
 
-            // Summary Table
             $this->info("✅ Sync completed successfully!");
             $this->table(
                 ['Metric', 'Count'],
@@ -179,8 +176,8 @@ class SyncDigiflazz extends Command
             );
 
             Log::info('Digiflazz sync completed', [
-                'total' => $totalProducts,
-                'synced' => $syncedCount,
+                'total'   => $totalProducts,
+                'synced'  => $syncedCount,
                 'skipped' => $skippedCount,
             ]);
 

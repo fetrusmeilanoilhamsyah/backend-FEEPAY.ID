@@ -11,7 +11,7 @@ use App\Services\DigiflazzService;
 use App\Services\TelegramService;
 use App\Mail\OrderSuccess;
 use App\Enums\OrderStatus;
-use Illuminate\Http\Request; // SUDAH DIPERBAIKI (Tadinya 'uses')
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -34,12 +34,12 @@ class OrderController extends Controller
             $idempotencyKey = $request->header('X-Idempotency-Key');
             if ($idempotencyKey) {
                 $cacheKey = 'idempotency:order:' . $idempotencyKey;
-                $cached = Cache::get($cacheKey);
+                $cached   = Cache::get($cacheKey);
                 if ($cached) {
                     return response()->json([
                         'success' => true,
                         'message' => 'Order created (cached)',
-                        'data' => $cached,
+                        'data'    => $cached,
                     ], 201);
                 }
             }
@@ -52,17 +52,18 @@ class OrderController extends Controller
                 return response()->json(['success' => false, 'message' => 'Produk tidak ditemukan'], 400);
             }
 
-            $orderId = 'FP' . strtoupper(Str::random(5)) . date('his');
+            // ✅ FIXED: Hapus date('his') yang predictable → full random 12 karakter
+            $orderId = 'FP' . strtoupper(Str::random(12));
 
             $order = Order::create([
-                'order_id' => $orderId,
-                'sku' => $request->sku,
-                'product_name' => $product->name,
-                'target_number' => $request->target_number,
-                'zone_id' => $request->zone_id,
+                'order_id'       => $orderId,
+                'sku'            => $request->sku,
+                'product_name'   => $product->name,
+                'target_number'  => $request->target_number,
+                'zone_id'        => $request->zone_id,
                 'customer_email' => $request->customer_email,
-                'total_price' => $product->selling_price,
-                'status' => OrderStatus::PENDING->value,
+                'total_price'    => $product->selling_price,
+                'status'         => OrderStatus::PENDING->value,
             ]);
 
             DB::commit();
@@ -93,7 +94,7 @@ class OrderController extends Controller
             $order = Order::lockForUpdate()->find($id);
 
             if (!$order) return response()->json(['success' => false, 'message' => 'Pesanan tidak ditemukan'], 404);
-            
+
             if ($order->status !== OrderStatus::PENDING) {
                 return response()->json(['success' => false, 'message' => 'Pesanan sudah diproses sebelumnya'], 400);
             }
@@ -103,15 +104,12 @@ class OrderController extends Controller
                 $target = $order->target_number . $order->zone_id;
             }
 
-            // Kirim ke Digiflazz
             $digiflazz = $this->digiflazzService->placeOrder($order->sku, $target, $order->order_id);
 
-            // HANDLE JIKA GAGAL DI AWAL (MISAL: SALDO HABIS)
             if (!$digiflazz['success']) {
                 $order->markAsFailed($request->user()->id, 'Digiflazz: ' . $digiflazz['message']);
                 DB::commit();
 
-                // NOTIFIKASI KE TELEGRAM
                 TelegramService::notify("
 ⚠️ *DANGER: TRANSAKSI GAGAL (SISTEM)*
 ----------------------------------
@@ -130,8 +128,8 @@ _Laporan: Segera cek saldo Digiflazz!_
             $apiData = $digiflazz['data'];
 
             $order->update([
-                'status' => OrderStatus::PROCESSING,
-                'sn' => $apiData['sn'] ?? '-',
+                'status'       => OrderStatus::PROCESSING,
+                'sn'           => $apiData['sn'] ?? '-',
                 'confirmed_by' => $request->user()->id,
                 'confirmed_at' => now(),
             ]);
@@ -140,7 +138,6 @@ _Laporan: Segera cek saldo Digiflazz!_
 
             DB::commit();
 
-            // NOTIFIKASI KE TELEGRAM
             TelegramService::notify("
 ⏳ *TRANSAKSI DIPROSES*
 ----------------------------------
@@ -157,9 +154,7 @@ _Menunggu callback sukses..._
         } catch (Exception $e) {
             DB::rollBack();
             Log::error('Confirm Order Failed', ['error' => $e->getMessage()]);
-
             TelegramService::notify("🚨 *SYSTEM ERROR:* Gagal konfirmasi order #{$id}.");
-
             return response()->json(['success' => false, 'message' => 'Sistem gagal memproses konfirmasi'], 500);
         }
     }
@@ -170,25 +165,25 @@ _Menunggu callback sukses..._
     public function syncStatus($orderId)
     {
         try {
-            $order = Order::where('order_id', $orderId)->firstOrFail();
+            $order  = Order::where('order_id', $orderId)->firstOrFail();
             $result = $this->digiflazzService->checkOrderStatus($order->order_id);
 
             if ($result['success']) {
-                $apiData = $result['data'];
+                $apiData    = $result['data'];
                 $digiStatus = strtolower($apiData['status'] ?? '');
 
                 $newStatus = match($digiStatus) {
                     'sukses' => OrderStatus::SUCCESS,
-                    'gagal' => OrderStatus::FAILED,
-                    default => OrderStatus::PROCESSING,
+                    'gagal'  => OrderStatus::FAILED,
+                    default  => OrderStatus::PROCESSING,
                 };
 
                 if ($order->status !== $newStatus) {
                     $order->update([
                         'status' => $newStatus,
-                        'sn' => $apiData['sn'] ?? $order->sn
+                        'sn'     => $apiData['sn'] ?? $order->sn,
                     ]);
-                    
+
                     $order->logStatusChange($newStatus, "Update otomatis dari provider");
 
                     $emoji = ($newStatus === OrderStatus::SUCCESS) ? '✅' : '❌';
@@ -210,9 +205,12 @@ $emoji *UPDATE STATUS (SYNC)*
                         }
                     }
                 }
+
                 return response()->json(['success' => true, 'message' => 'Status diperbarui', 'status' => $order->status]);
             }
+
             return response()->json(['success' => false, 'message' => $result['message']], 400);
+
         } catch (Exception $e) {
             return response()->json(['success' => false, 'message' => 'Gagal sinkronisasi status'], 500);
         }

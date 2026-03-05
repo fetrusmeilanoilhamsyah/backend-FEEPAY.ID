@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Order;
-use App\Models\Payment;
 use App\Models\Product;
 use App\Enums\OrderStatus;
 use Illuminate\Http\Request;
@@ -34,12 +33,6 @@ class DashboardController extends Controller
                 ->whereBetween('created_at', [$startDate, $endDate])
                 ->sum('total_price');
 
-            // Statistik Pembayaran
-            $pendingPayments = Payment::where('status', 'pending')->count();
-            $verifiedPayments = Payment::where('status', 'success')
-                ->whereBetween('created_at', [$startDate, $endDate])
-                ->count();
-
             // Aktivitas Terbaru
             $recentOrders = Order::orderBy('created_at', 'desc')
                 ->limit(10)
@@ -61,20 +54,18 @@ class DashboardController extends Controller
                 'success' => true,
                 'data' => [
                     'overview' => [
-                        'total_orders' => $totalOrders,
+                        'total_orders'   => $totalOrders,
                         'pending_orders' => $pendingOrders,
                         'success_orders' => $successOrders,
-                        'failed_orders' => $failedOrders,
-                        'total_revenue' => (float) $totalRevenue,
-                        'pending_payments' => $pendingPayments,
-                        'verified_payments' => $verifiedPayments,
+                        'failed_orders'  => $failedOrders,
+                        'total_revenue'  => (float) $totalRevenue,
                         'total_products' => Product::count(),
                     ],
                     'recent_orders' => $recentOrders,
                     'daily_revenue' => $dailyRevenue,
-                    'date_range' => [
+                    'date_range'    => [
                         'start' => $startDate,
-                        'end' => $endDate,
+                        'end'   => $endDate,
                     ],
                 ],
             ], 200);
@@ -92,7 +83,7 @@ class DashboardController extends Controller
     {
         try {
             $digiflazzService = app(\App\Services\DigiflazzService::class);
-            $result = $digiflazzService->checkBalance(); // Sesuaikan nama method di service kamu
+            $result = $digiflazzService->getBalance(); // ✅ FIXED: checkBalance() → getBalance()
 
             if (!$result['success']) {
                 return response()->json([
@@ -102,14 +93,14 @@ class DashboardController extends Controller
             }
 
             $balance = $result['data']['deposit'] ?? 0;
-            $isLow = $balance < 50000;
+            $isLow   = $balance < 50000;
 
             return response()->json([
                 'success' => true,
-                'data' => [
-                    'balance' => $balance,
+                'data'    => [
+                    'balance'           => $balance,
                     'balance_formatted' => 'Rp ' . number_format($balance, 0, ',', '.'),
-                    'is_low' => $isLow,
+                    'is_low'            => $isLow,
                 ],
             ], 200);
 

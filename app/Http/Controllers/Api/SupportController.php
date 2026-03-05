@@ -12,46 +12,43 @@ class SupportController extends Controller
 {
     /**
      * Send support message
-     * 
+     *
      * POST /api/support/send
      */
     public function send(Request $request)
     {
         $request->validate([
-            'name' => 'nullable|string|max:100',
-            'email' => 'nullable|email|max:100',
-            'message' => 'required|string|max:1000',
+            'name'     => 'nullable|string|max:100',
+            'email'    => 'nullable|email|max:100',
+            'message'  => 'required|string|max:1000',
             'platform' => 'nullable|in:whatsapp,telegram',
             'order_id' => 'nullable|string|max:50',
         ]);
 
         try {
-            // Save to database
             $support = SupportMessage::create([
-                'user_name' => $request->name ?? 'Guest',
+                'user_name'  => $request->name ?? 'Guest',
                 'user_email' => $request->email ?? 'no-email@feepay.id',
-                'message' => $request->message,
-                'platform' => $request->platform ?? 'whatsapp',
-                'order_id' => $request->order_id,
-                'status' => 'pending',
+                'message'    => $request->message,
+                'platform'   => $request->platform ?? 'whatsapp',
+                'order_id'   => $request->order_id,
+                'status'     => 'pending',
             ]);
 
-            // Log message
             Log::info('Support message received', [
-                'id' => $support->id,
-                'name' => $request->name,
-                'email' => $request->email,
+                'id'       => $support->id,
+                'name'     => $request->name,
+                'email'    => $request->email,
                 'platform' => $request->platform,
-                'ip' => $request->ip(),
+                'ip'       => $request->ip(),
             ]);
 
-            // Send Telegram notification to admin
             try {
                 $this->sendTelegramNotification($support);
                 $support->update(['status' => 'sent']);
             } catch (\Exception $e) {
                 Log::error('Failed to send Telegram notification', [
-                    'error' => $e->getMessage(),
+                    'error'      => $e->getMessage(),
                     'support_id' => $support->id,
                 ]);
                 $support->update(['status' => 'failed']);
@@ -60,10 +57,10 @@ class SupportController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Pesan berhasil dikirim. Tim kami akan segera merespons.',
-                'data' => [
+                'data'    => [
                     'ticket_id' => 'SUP' . str_pad($support->id, 6, '0', STR_PAD_LEFT),
-                    'sent_at' => now()->toIso8601String(),
-                ]
+                    'sent_at'   => now()->toIso8601String(),
+                ],
             ], 200);
 
         } catch (\Exception $e) {
@@ -81,30 +78,26 @@ class SupportController extends Controller
 
     /**
      * Send Telegram notification to admin
-     * 
-     * @param SupportMessage $support
-     * @return array
-     * @throws \Exception
      */
     private function sendTelegramNotification(SupportMessage $support)
     {
-        $botToken = env('TELEGRAM_BOT_TOKEN');
-        $chatId = env('TELEGRAM_CHAT_ID');
+        // ✅ FIXED: env() → config()
+        $botToken = config('services.telegram.bot_token');
+        $chatId   = config('services.telegram.chat_id');
 
         if (!$botToken || !$chatId) {
             throw new \Exception('Telegram configuration missing');
         }
 
-        $ticketId = 'SUP' . str_pad($support->id, 6, '0', STR_PAD_LEFT);
-        $platformEmoji = $support->platform === 'telegram' ? '✈️' : '💬';
+        $ticketId       = 'SUP' . str_pad($support->id, 6, '0', STR_PAD_LEFT);
+        $platformEmoji  = $support->platform === 'telegram' ? '✈️' : '💬';
 
-        // Escape all dynamic content properly
         $escapedTicketId = $this->escapeMarkdown($ticketId);
-        $escapedName = $this->escapeMarkdown($support->user_name);
-        $escapedEmail = $this->escapeMarkdown($support->user_email);
+        $escapedName     = $this->escapeMarkdown($support->user_name);
+        $escapedEmail    = $this->escapeMarkdown($support->user_email);
         $escapedPlatform = $this->escapeMarkdown(ucfirst($support->platform));
-        $escapedMessage = $this->escapeMarkdown($support->message);
-        $escapedTime = $this->escapeMarkdown($support->created_at->format('d M Y H:i') . ' WIB');
+        $escapedMessage  = $this->escapeMarkdown($support->message);
+        $escapedTime     = $this->escapeMarkdown($support->created_at->format('d M Y H:i') . ' WIB');
 
         $message = "🔔 *SUPPORT MESSAGE BARU \\- FEEPAY\\.ID*\n\n" .
                    "📋 *Ticket:* `{$escapedTicketId}`\n" .
@@ -115,10 +108,10 @@ class SupportController extends Controller
                    "🕒 *Waktu:* {$escapedTime}";
 
         $url = "https://api.telegram.org/bot{$botToken}/sendMessage";
-        
+
         $response = Http::timeout(10)->post($url, [
-            'chat_id' => $chatId,
-            'text' => $message,
+            'chat_id'    => $chatId,
+            'text'       => $message,
             'parse_mode' => 'MarkdownV2',
         ]);
 
@@ -128,7 +121,7 @@ class SupportController extends Controller
 
         Log::info('Telegram notification sent', [
             'ticket_id' => $ticketId,
-            'chat_id' => $chatId,
+            'chat_id'   => $chatId,
         ]);
 
         return $response->json();
@@ -136,9 +129,6 @@ class SupportController extends Controller
 
     /**
      * Escape special characters for Telegram MarkdownV2
-     * 
-     * @param string|null $text
-     * @return string
      */
     private function escapeMarkdown($text)
     {
@@ -146,47 +136,49 @@ class SupportController extends Controller
             return '';
         }
 
-        // Characters that need to be escaped in MarkdownV2
         $specialChars = [
-            '\\', '_', '*', '[', ']', '(', ')', '~', '`', 
+            '\\', '_', '*', '[', ']', '(', ')', '~', '`',
             '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'
         ];
-        
-        // Escape backslash first to avoid double escaping
+
         $text = str_replace('\\', '\\\\', $text);
-        
-        // Then escape other special characters
+
         foreach ($specialChars as $char) {
-            if ($char !== '\\') { // Skip backslash as it's already done
+            if ($char !== '\\') {
                 $text = str_replace($char, '\\' . $char, $text);
             }
         }
-        
+
         return $text;
     }
 
     /**
      * Get contact information
-     * 
+     *
      * GET /api/support/contacts
      */
     public function getContacts()
     {
+        // ✅ FIXED: env() → config()
+        $wa       = config('feepay.support_whatsapp', '6281234567890');
+        $telegram = config('feepay.support_telegram', 'feepay_support');
+        $email    = config('feepay.support_email', 'support@feepay.id');
+
         return response()->json([
             'success' => true,
-            'data' => [
+            'data'    => [
                 'whatsapp' => [
-                    'number' => env('SUPPORT_WHATSAPP', '6281234567890'),
-                    'url' => 'https://wa.me/' . env('SUPPORT_WHATSAPP', '6281234567890'),
-                    'label' => 'WhatsApp Support',
+                    'number' => $wa,
+                    'url'    => 'https://wa.me/' . $wa,
+                    'label'  => 'WhatsApp Support',
                 ],
-                'telegram' => [  // ← DIPERBAIKI: tambah kurung siku
-                    'username' => env('SUPPORT_TELEGRAM', 'feepay_support'),
-                    'url' => 'https://t.me/' . env('SUPPORT_TELEGRAM', 'feepay_support'),
-                    'label' => 'Telegram Support',
+                'telegram' => [
+                    'username' => $telegram,
+                    'url'      => 'https://t.me/' . $telegram,
+                    'label'    => 'Telegram Support',
                 ],
-                'email' => env('SUPPORT_EMAIL', 'support@feepay.id'),
-            ]
+                'email' => $email,
+            ],
         ], 200);
     }
 }

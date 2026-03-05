@@ -9,18 +9,25 @@ return [
         'https://feepay.web.id',
         'https://www.feepay.web.id',
         'https://api.feepay.web.id',
-        // Tetap masukkan yang ini untuk cadangan
         'https://feepay.id',
         'https://www.feepay.id',
     ],
 
     'allowed_origins_patterns' => [],
 
-    'allowed_headers' => ['*'],
+    // ✅ FIXED: '*' → header spesifik yang dipakai FEEPAY.ID
+    'allowed_headers' => [
+        'Content-Type',
+        'Authorization',
+        'Accept',
+        'X-Requested-With',
+        'X-Idempotency-Key',
+        'X-Admin-Pin',
+    ],
 
     'exposed_headers' => [],
 
-    'max_age' => 0,
+    'max_age' => 86400, // cache preflight 24 jam
 
     'supports_credentials' => true,
 ];

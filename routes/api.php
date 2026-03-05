@@ -3,7 +3,6 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\OrderController;
-use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\MidtransPaymentController;
 use App\Http\Controllers\Api\CallbackController;
 use App\Http\Controllers\Api\ProductController;
@@ -13,10 +12,10 @@ use App\Http\Controllers\Api\SupportController;
 // Health check - no rate limit
 Route::get('/health', function () {
     return response()->json([
-        'success' => true,
-        'message' => 'FEEPAY.ID API is running',
+        'success'   => true,
+        'message'   => 'FEEPAY.ID API is running',
         'timestamp' => now()->toIso8601String(),
-        'version' => '2.5',
+        'version'   => '2.5',
     ]);
 });
 
@@ -26,30 +25,29 @@ Route::get('/health', function () {
 |--------------------------------------------------------------------------
 */
 
-// ✅ Admin Login - STRICT rate limit (5 attempts per minute)
+// Admin Login - STRICT rate limit (5 attempts per minute)
 Route::middleware('throttle:5,1')->group(function () {
     Route::post('/admin/login', [AuthController::class, 'login']);
 });
 
-// ✅ Support - Existing rate limit (5 per minute)
+// Support - rate limit (5 per minute)
 Route::middleware('throttle:5,1')->group(function () {
     Route::post('/support/send', [SupportController::class, 'send']);
 });
 
-// ✅ Moderate rate limit (20 per minute) - User actions
+// User actions - rate limit (20 per minute)
 Route::middleware('throttle:20,1')->group(function () {
     Route::post('/orders/create', [OrderController::class, 'store']);
-    Route::post('/payments/submit', [PaymentController::class, 'submit']);
     Route::post('/payments/midtrans/create', [MidtransPaymentController::class, 'createPayment']);
 });
 
-// ✅ Webhooks - Permissive but protected (100 per minute)
+// Webhooks - permissive (100 per minute)
 Route::middleware('throttle:100,1')->group(function () {
     Route::post('/callback/digiflazz', [CallbackController::class, 'digiflazz']);
     Route::post('/midtrans/webhook', [MidtransPaymentController::class, 'handleNotification']);
 });
 
-// ✅ Read-only endpoints - Liberal rate limit (60 per minute)
+// Read-only endpoints (60 per minute)
 Route::middleware('throttle:60,1')->group(function () {
     Route::get('/products', [ProductController::class, 'index']);
     Route::post('/orders/{orderId}', [OrderController::class, 'show']);
@@ -66,6 +64,7 @@ Route::prefix('admin')->group(function () {
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::get('/me', [AuthController::class, 'me']);
+        Route::post('/refresh', [AuthController::class, 'refresh']); // ✅ ADDED: fix 404 di frontend
     });
 });
 
@@ -78,7 +77,7 @@ Route::prefix('admin')->group(function () {
 Route::prefix('admin/' . config('app.admin_path'))
     ->middleware(['admin.ip', 'auth:sanctum', 'verify.pin'])
     ->group(function () {
-        
+
         // Dashboard
         Route::prefix('dashboard')->group(function () {
             Route::get('/stats', [DashboardController::class, 'stats']);
@@ -93,12 +92,7 @@ Route::prefix('admin/' . config('app.admin_path'))
             Route::post('/{id}/sync', [OrderController::class, 'sync']);
         });
 
-        // Payments Management
-        Route::prefix('payments')->group(function () {
-            Route::get('/', [PaymentController::class, 'index']);
-            Route::post('/{id}/verify', [PaymentController::class, 'verify']);
-            Route::get('/{id}/proof', [PaymentController::class, 'downloadProof']);
-        });
+        // ✅ REMOVED: Payments Management (zombie - manual payment dihapus)
 
         // Products Management
         Route::prefix('products')->group(function () {
