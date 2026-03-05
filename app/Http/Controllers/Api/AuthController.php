@@ -147,4 +147,45 @@ class AuthController extends Controller
             ],
         ], 200);
     }
+
+    /**
+     * Refresh token — revoke old, issue new
+     *
+     * POST /api/admin/refresh
+     */
+    public function refresh(Request $request)
+    {
+        try {
+            $user = $request->user();
+
+            // Revoke current token
+            $user->currentAccessToken()->delete();
+
+            // Issue new token
+            $newToken = $user->createToken('admin-token')->plainTextToken;
+
+            Log::info('Admin token refreshed', [
+                'user_id' => $user->id,
+                'ip'      => $request->ip(),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Token refreshed',
+                'data'    => [
+                    'token' => $newToken,
+                ],
+            ], 200);
+
+        } catch (\Exception $e) {
+            Log::error('Token refresh error', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to refresh token',
+            ], 500);
+        }
+    }
 }
