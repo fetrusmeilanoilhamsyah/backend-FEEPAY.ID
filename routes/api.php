@@ -75,7 +75,7 @@ Route::prefix('admin')->group(function () {
 */
 
 Route::prefix('admin/' . config('app.admin_path'))
-    -->middleware(['auth:sanctum', 'verify.pin'])  // Hapus 'admin.ip'
+    ->middleware(['auth:sanctum', 'verify.pin'])  // Hapus 'admin.ip'
     ->group(function () {
 
         // Dashboard
