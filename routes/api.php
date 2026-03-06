@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\CallbackController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\SupportController;
+use App\Models\Order;
 
 /*
 |--------------------------------------------------------------------------
@@ -55,8 +56,27 @@ Route::middleware('throttle:100,1')->group(function () {
 // Read-only publik: 60 per menit
 Route::middleware('throttle:60,1')->group(function () {
     Route::get('/products', [ProductController::class, 'index']);
+
     // POST dipakai karena email pelanggan dikirim sebagai body untuk verifikasi kepemilikan
     Route::post('/orders/{orderId}', [OrderController::class, 'show']);
+
+    // Polling status pembayaran dari checkout.blade.php — cek apakah sudah dibayar
+    // Dipakai oleh halaman /payment/checkout/{orderId} setiap 5 detik
+    Route::get('/payment/status/{orderId}', function (string $orderId) {
+        $order = Order::where('order_id', $orderId)->first();
+
+        if (!$order) {
+            return response()->json(['success' => false, 'message' => 'Order tidak ditemukan.'], 404);
+        }
+
+        $status = $order->status->value;
+
+        return response()->json([
+            'success' => true,
+            'status'  => $status,
+            'is_paid' => in_array($status, ['processing', 'success']),
+        ]);
+    });
 });
 
 /*
@@ -73,22 +93,17 @@ Route::prefix('admin')->middleware('auth:sanctum')->group(function () {
 /*
 |--------------------------------------------------------------------------
 | Protected Admin Routes (token + PIN + rate limit admin)
-|
-| Fix BUG-03: gunakan config('feepay.admin_path') yang benar (bukan app.admin_path)
-| dan pastikan nilainya tidak null sebelum digunakan.
 |--------------------------------------------------------------------------
 */
 
 $adminPath = config('feepay.admin_path');
 
 if (empty($adminPath)) {
-    // Di production ini akan fatal — log dan hentikan
     if (config('app.env') === 'production') {
         throw new \RuntimeException(
             'ADMIN_PATH_PREFIX belum diset di .env! Wajib diisi sebelum deploy ke production.'
         );
     }
-    // Di development: pakai fallback yang panjang dan tidak mudah ditebak
     $adminPath = 'dev-admin-path-change-me';
 }
 
@@ -107,8 +122,6 @@ Route::prefix("admin/{$adminPath}")
         Route::prefix('orders')->group(function () {
             Route::get('/', [OrderController::class, 'index']);
             Route::post('/{id}/confirm', [OrderController::class, 'confirm']);
-            // Fix BUG-13: sebelumnya memanggil method 'sync' yang tidak ada.
-            // Sekarang memanggil 'sync' yang sudah didefinisikan dengan benar di OrderController.
             Route::post('/{orderId}/sync', [OrderController::class, 'sync']);
         });
 
