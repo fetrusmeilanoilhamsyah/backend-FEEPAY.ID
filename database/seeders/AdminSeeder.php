@@ -1,4 +1,4 @@
-<?php
+\<?php
 
 namespace Database\Seeders;
 
@@ -8,27 +8,29 @@ use Illuminate\Support\Facades\Hash;
 
 class AdminSeeder extends Seeder
 {
-    /**
-     * Run the database seeds.
-     */
     public function run(): void
     {
-        // ✅ FIXED: Password dari env, tidak hardcode
+        // ─── Validasi password ────────────────────────────────────────────────
         $password = env('ADMIN_SEED_PASSWORD');
 
         if (!$password) {
-            $this->command->error('❌ ADMIN_SEED_PASSWORD not set in .env! Seeder aborted.');
-            $this->command->info('   Add ADMIN_SEED_PASSWORD=yourpassword to .env first.');
+            $this->command->error('❌ ADMIN_SEED_PASSWORD belum diset di .env! Seeder dibatalkan.');
+            $this->command->info('   Tambahkan ADMIN_SEED_PASSWORD=passwordkuat ke .env dulu.');
             return;
         }
 
         if (strlen($password) < 8) {
-            $this->command->error('❌ ADMIN_SEED_PASSWORD must be at least 8 characters!');
+            $this->command->error('❌ ADMIN_SEED_PASSWORD minimal 8 karakter!');
             return;
         }
 
+        // ─── Fix PROD-03: Email dari .env, tidak hardcode ─────────────────────
+        // Sebelumnya email di updateOrCreate adalah 'admin@feepay.id'
+        // tapi pesan info menampilkan email lain — menyebabkan login gagal.
+        $email = env('ADMIN_EMAIL', 'admin@feepay.id');
+
         User::updateOrCreate(
-            ['email' => 'admin@feepay.id'],
+            ['email' => $email],
             [
                 'name'              => 'Admin FEEPAY',
                 'password'          => Hash::make($password),
@@ -38,9 +40,9 @@ class AdminSeeder extends Seeder
             ]
         );
 
-        $this->command->info('✅ Admin user created:');
-        $this->command->info('   Email: fetrusmeilanoilham@gmail.com');
-        $this->command->info('   Password: (from ADMIN_SEED_PASSWORD in .env)');
-        $this->command->warn('   Delete ADMIN_SEED_PASSWORD from .env after seeding!');
+        $this->command->info('✅ Akun admin berhasil dibuat:');
+        $this->command->info("   Email   : {$email}");
+        $this->command->info('   Password: (dari ADMIN_SEED_PASSWORD di .env)');
+        $this->command->warn('⚠️  Hapus ADMIN_SEED_PASSWORD dari .env setelah seeding selesai!');
     }
 }

@@ -73,7 +73,9 @@ class ProductController extends Controller
      * POST /api/admin/{path}/products/bulk-margin
      * Update margin semua produk sekaligus.
      *
-     * Fix BUG-01: menggunakan parameter binding, bukan DB::raw interpolasi langsung.
+     * Fix PROD-01: sebelumnya ada dua UPDATE sekaligus —
+     * DB::table()->update() dengan DB::raw('cost_price + ?') yang INVALID
+     * diikuti DB::statement() yang benar. Sekarang hanya satu query.
      */
     public function bulkUpdateMargin(Request $request): JsonResponse
     {
@@ -82,22 +84,11 @@ class ProductController extends Controller
         ]);
 
         try {
-            // Cast eksplisit ke float — aman sebagai parameter binding
             $margin = (float) $request->margin;
 
-            // Gunakan binding parameter — tidak ada SQL injection
-            $updatedCount = DB::table('products')->update([
-                'selling_price' => DB::raw('cost_price + ?'),
-            ]);
+            // Satu statement dengan parameter binding — aman dari SQL injection
+            DB::statement('UPDATE products SET selling_price = cost_price + ?', [$margin]);
 
-            // Karena DB::raw + binding tidak bekerja langsung di update(),
-            // gunakan pendekatan yang benar dengan whereRaw tidak diperlukan:
-            DB::statement(
-                'UPDATE products SET selling_price = cost_price + ?',
-                [$margin]
-            );
-
-            // Hitung jumlah yang diupdate untuk response
             $updatedCount = Product::count();
 
             return response()->json([
@@ -115,7 +106,6 @@ class ProductController extends Controller
     /**
      * POST /api/admin/{path}/products/sync
      * Sinkronisasi produk dari Digiflazz API.
-     * Dijalankan sebagai HTTP request biasa — untuk operasi besar gunakan Artisan command.
      */
     public function sync(Request $request): JsonResponse
     {
@@ -142,7 +132,6 @@ class ProductController extends Controller
 
                     $existing = Product::where('sku', $sku)->first();
 
-                    // Proteksi rugi: jika modal naik melebihi harga jual lama
                     if ($existing) {
                         $sellingPrice = (float) $existing->selling_price;
                         if ($costPrice >= $sellingPrice) {

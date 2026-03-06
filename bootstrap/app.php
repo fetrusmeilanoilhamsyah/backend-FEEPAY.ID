@@ -1,4 +1,4 @@
-<?php
+\<?php
 
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -12,12 +12,20 @@ return Application::configure(basePath: dirname(__DIR__))
         health:   '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
+
+        // ─── Fix PROD-04: Middleware global yang sebelumnya di Kernel.php ────
+        // Laravel 12 tidak pakai Kernel.php lagi — harus didaftarkan di sini.
+        // Sebelumnya SecurityHeaders dan ForceHttps tidak aktif sama sekali.
+        $middleware->append(\App\Http\Middleware\SecurityHeaders::class);
+        $middleware->append(\App\Http\Middleware\ForceHttps::class);
+
+        // ─── Alias middleware untuk route ─────────────────────────────────────
         $middleware->alias([
             'verify.pin' => \App\Http\Middleware\VerifyPinMiddleware::class,
             'admin.ip'   => \App\Http\Middleware\AdminIpWhitelist::class,
         ]);
 
-        // Nonaktifkan CSRF untuk semua route API
+        // ─── Nonaktifkan CSRF untuk semua route API ───────────────────────────
         $middleware->validateCsrfTokens(except: ['api/*']);
     })
     ->withExceptions(function (Exceptions $exceptions) {
