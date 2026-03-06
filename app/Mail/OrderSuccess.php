@@ -3,32 +3,33 @@
 namespace App\Mail;
 
 use App\Models\Order;
+use App\Models\Product;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class OrderFailed extends Mailable
+class OrderSuccess extends Mailable
 {
     use Queueable, SerializesModels;
 
     public function __construct(
-        public Order  $order,
-        public string $reason = 'Terjadi kesalahan saat memproses pesanan Anda.'
+        public Order   $order,
+        public Product $product
     ) {}
 
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: '❌ Pesanan Gagal Diproses — ' . $this->order->order_id . ' | FEEPAY.ID',
+            subject: '✅ Pesanan Berhasil — ' . $this->order->order_id . ' | FEEPAY.ID',
         );
     }
 
     public function content(): Content
     {
         return new Content(
-            view: 'emails.order-failed',
+            view: 'emails.order-success',
         );
     }
 

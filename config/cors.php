@@ -11,6 +11,12 @@ return [
         'https://api.feepay.web.id',
         'https://feepay.id',
         'https://www.feepay.id',
+
+        // Domain Vercel — ganti sesuai nama project kamu
+        'https://NAMA_PROJECT_KAMU.vercel.app',
+
+        // Kalau sudah pakai custom domain di Vercel, tambah di sini juga:
+        // 'https://custom-domain-kamu.com',
     ],
 
     'allowed_origins_patterns' => [],
