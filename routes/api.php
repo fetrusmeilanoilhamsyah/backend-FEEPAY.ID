@@ -108,7 +108,7 @@ if (empty($adminPath)) {
 }
 
 Route::prefix("admin/{$adminPath}")
-    ->middleware(['auth:sanctum', 'verify.pin', 'throttle:60,1'])
+    ->middleware(['auth:sanctum', 'admin.ip', 'verify.pin', 'throttle:60,1'])
     ->group(function () {
 
         // Dashboard
