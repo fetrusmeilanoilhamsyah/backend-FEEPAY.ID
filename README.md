@@ -13,11 +13,12 @@
 ## 📑 Daftar Isi
 
 - [Gambaran Umum](#-gambaran-umum)
-- [Tampilan Aplikasi](#-tampilan-aplikasi)
 - [Arsitektur & Teknologi](#️-arsitektur--teknologi)
 - [Fitur Lengkap](#-fitur-lengkap)
-- [Telegram CS Bot](#-telegram-cs-bot)
+- [Keamanan Berlapis](#-keamanan-berlapis)
 - [Struktur Endpoint API](#-struktur-endpoint-api)
+- [Struktur Database](#-struktur-database)
+- [Struktur Folder Proyek](#-struktur-folder-proyek)
 - [Panduan Instalasi](#-panduan-instalasi)
 - [Development vs Production](#️-development-vs-production)
 - [Jadwal Auto-Sync Produk](#-jadwal-auto-sync-produk)
@@ -29,7 +30,7 @@
 
 ## 🎯 Gambaran Umum
 
-FEEPAY.ID adalah full-stack platform untuk toko produk digital dan PPOB (Payment Point Online Bank). Sistem menangani seluruh alur — dari pelanggan memilih produk di storefront, melakukan pembayaran, hingga produk otomatis terkirim — tanpa intervensi manual.
+FEEPAY.ID adalah backend REST API untuk platform toko produk digital dan PPOB (Payment Point Online Bank). Sistem menangani seluruh alur — dari pelanggan memilih produk di storefront, melakukan pembayaran via Midtrans, hingga produk otomatis dikirim ke Digiflazz — tanpa intervensi manual.
 
 **Kategori produk yang tersedia:**
 - 📱 Pulsa (semua operator)
@@ -37,45 +38,6 @@ FEEPAY.ID adalah full-stack platform untuk toko produk digital dan PPOB (Payment
 - ⚡ Token Listrik PLN
 - 🎮 Top Up Game (Free Fire, Mobile Legends, dll.)
 - 🎟️ Voucher Game
-
----
-
-## 🖥️ Tampilan Aplikasi
-
-### Halaman Beranda (Storefront)
-Tampilan toko yang bersih dengan kategori produk, banner promosi, dan panduan cara transaksi. Mendukung **Dark Mode**.
-
-**Navigasi member:**
-| Halaman | Fungsi |
-|---|---|
-| **Beranda** | Katalog produk & kategori layanan |
-| **Riwayat** | Pantau status semua pesanan |
-| **Profil** | Kelola data akun |
-| **Dashboard** | Panel admin (khusus admin) |
-
-### Halaman Riwayat Transaksi
-Member dapat memantau semua pesanan dengan filter status:
-
-```
-[ Semua ]  [ Menunggu ]  [ Diproses ]  [ Berhasil ]  [ Gagal ]
-```
-
-Dilengkapi fitur **pencarian** berdasarkan Order ID, nama produk, atau nomor tujuan.
-
-### Dashboard Admin
-Panel lengkap untuk mengelola seluruh operasi toko:
-
-```
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│  TOTAL PESANAN  │  │     PENDING     │  │  TOTAL REVENUE  │
-│       42        │  │        3        │  │   Rp 4.250.000  │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│  SALDO DIGIFLAZZ                        [ Refresh Saldo ]  │
-│  Rp 1.250.000                                               │
-└─────────────────────────────────────────────────────────────┘
-```
 
 ---
 
@@ -96,357 +58,373 @@ Panel lengkap untuk mengelola seluruh operasi toko:
 │  └─────────────┘                 │            │           │
 │                            ┌─────▼──────┐ ┌──▼────────┐  │
 │  ┌─────────────┐          │ Digiflazz  │ │ Telegram  │  │
-│  │    MySQL    │◄─────────│ (PPOB API) │ │ (CS Bot)  │  │
+│  │    MySQL    │◄─────────│ (PPOB API) │ │  (Alert)  │  │
 │  └─────────────┘          └────────────┘ └───────────┘  │
 └──────────────────────────────────────────────────────────┘
 ```
 
 | Komponen | Teknologi | Detail |
 |---|---|---|
-| **Framework** | Laravel 11 | PHP 8.2+, latest stable |
-| **Database** | MySQL | Indexing dioptimasi di tabel transaksi |
-| **Frontend Build** | Vite | Asset bundling cepat |
-| **Auth API** | Laravel Sanctum | Token-based, aman untuk SPA |
-| **Queue** | Database Driver | Job background: webhook, email, order |
-| **Admin Security** | Route Obfuscation + PIN | Path tersembunyi + PIN verifikasi |
-| **CS Support** | Telegram Bot | Terima & kelola tiket support member |
-| **Email** | SMTP (Gmail) | Notifikasi order sukses/gagal ke member |
+| **Framework** | Laravel 11 | PHP 8.2+, API-only mode |
+| **Database** | MySQL | Index dioptimasi di tabel orders & products |
+| **Frontend Build** | Vite | Asset bundling |
+| **Auth API** | Laravel Sanctum | Token-based, expire 24 jam, single session |
+| **Queue** | Database Driver | Job background: email notifikasi |
+| **Admin Security** | Triple-layer | Token + PIN 6 digit + secret path |
+| **Notifikasi** | Telegram Bot | Alert real-time ke admin |
+| **Email** | SMTP (Brevo/Gmail) | Notifikasi order sukses/gagal ke pelanggan |
 
 ---
 
 ## 🔥 Fitur Lengkap
 
-### 1. 🛒 Storefront Produk Digital
-Halaman belanja yang lengkap dengan tampilan produk berdasarkan kategori:
+### 1. 🛒 Katalog Produk Digital
 
-- **Pulsa** — Semua operator (Telkomsel, Indosat, XL, Axis, Tri, dll.)
-- **Kuota Data** — Paket internet semua operator
-- **Token PLN** — Pembelian token listrik prabayar
-- **Top Up Game** — Free Fire, Mobile Legends, dan game lainnya
-- **Voucher Game** — Berbagai voucher game digital
+Endpoint publik yang menyajikan daftar produk aktif dengan filter kategori. Produk memiliki field `cost_price` (harga modal dari Digiflazz), `selling_price` (harga jual ke pelanggan), dan `profit_margin` (kalkulasi otomatis) yang hanya terlihat di sisi admin.
 
-Setiap produk menampilkan harga jual yang sudah termasuk margin admin. Member hanya perlu memasukkan nomor HP / ID akun game.
+Produk mendukung field `type` dan `brand` untuk membedakan tampilan UI antara produk pulsa dan top up game (yang butuh Server ID/Zone ID).
 
 ---
 
 ### 2. 💳 Integrasi Midtrans (Payment Gateway)
-Proses pembayaran yang aman dengan beragam pilihan metode:
 
+Proses pembayaran yang aman dengan berbagai metode:
 - Virtual Account (BCA, Mandiri, BNI, BRI, dll.)
 - QRIS
 - E-wallet (GoPay, OVO, dll.)
 
-**Alur pembayaran lengkap:**
+**Penting — harga 100% dari database:** Amount yang dikirim ke Midtrans diambil dari `products.selling_price` di database, bukan dari request pelanggan. Tidak bisa dimanipulasi.
+
+**Alur pembayaran:**
 ```
-Member checkout → Invoice dibuat → Link pembayaran Midtrans digenerate
+POST /api/orders/create           → Order dibuat, status: pending
        ↓
-Member bayar via metode pilihan
+POST /api/payments/midtrans/create → Snap Token dibuat dari harga di DB
        ↓
-Midtrans kirim webhook ke server FEEPAY.ID
+Pelanggan bayar via Midtrans UI
        ↓
-Laravel Queue memproses secara background (non-blocking)
+POST /api/midtrans/webhook         → Notifikasi Midtrans (signature SHA-512 diverifikasi)
        ↓
-Order dikirim otomatis ke Digiflazz
+Otomatis kirim ke Digiflazz        → lockForUpdate() cegah double-send
        ↓
-Produk (SN / Token / Pulsa) terkirim → Email konfirmasi ke member
+POST /api/callback/digiflazz       → Callback status (signature MD5 diverifikasi)
+       ↓
+Email + Telegram notifikasi        → Email via Queue (async), Telegram real-time
 ```
+
+**Snap Token reuse:** Jika pelanggan request Snap Token dua kali untuk order yang sama, sistem mengembalikan token lama (tidak buat baru) untuk menghindari error duplikat dari Midtrans.
 
 ---
 
 ### 3. ⚡ Integrasi Digiflazz (PPOB Provider)
-Eksekusi order produk digital secara real-time:
 
-- Sinkronisasi katalog produk otomatis dari Digiflazz
-- Pengecekan saldo Digiflazz langsung dari Dashboard Admin
-- Eksekusi pembelian (deposit ke nomor/ID tujuan) otomatis setelah pembayaran terkonfirmasi
-- **Retry logic** — Jika terjadi timeout/error sementara di sisi Digiflazz, sistem mencoba ulang otomatis
+- Sinkronisasi katalog produk manual (via admin dashboard) maupun otomatis (via scheduler)
+- Pengecekan saldo Digiflazz langsung dari dashboard admin
+- Eksekusi order otomatis setelah pembayaran terkonfirmasi
+- Sinkronisasi status manual jika callback tidak diterima
+
+**Proteksi harga saat sync:** Saat sync produk, jika harga modal baru dari Digiflazz lebih tinggi dari harga jual yang sudah diset admin, selling price otomatis disesuaikan (cost + default margin). Harga jual yang masih di atas harga modal **tidak akan ditimpa**.
 
 ---
 
 ### 4. 🖥️ Dashboard Admin
-Panel administrasi lengkap yang diakses melalui path tersembunyi.
 
-**Tab Produk:**
-- Tampilan produk berdasarkan kategori (Aktivasi Perdana, Aktivasi Voucher, Pulsa, Token PLN, dll.)
-- Lihat **Harga Modal**, **Harga Jual**, dan **Margin** tiap produk secara transparan
-- **Edit Harga** — Ubah harga jual per produk secara individual
-- **Set Margin Global** — Input nominal margin, terapkan ke semua produk sekaligus dengan satu klik tombol **Terapkan**
-- **Sync Products** — Sinkronisasi manual katalog terbaru dari Digiflazz
+Diakses melalui path tersembunyi yang dikonfigurasi via `.env`. Setiap request ke endpoint admin protected membutuhkan **tiga lapis verifikasi**: Bearer Token + header `X-Admin-PIN` + secret path.
 
-**Tab Pesanan:**
-- Lihat semua transaksi secara real-time
-- **Approve Transaksi Manual** — Untuk edge-case yang memerlukan konfirmasi admin
-- Statistik ringkas: Total Pesanan, Pending, Total Revenue
+**Statistik & Monitoring:**
+- Total order, pending, sukses, gagal (dengan filter rentang tanggal)
+- Revenue total dan grafik revenue 7 hari terakhir
+- Daftar 10 order terbaru
+- Statistik produk aktif/total per kategori
+- Cek saldo Digiflazz real-time
 
-**Widget Saldo Digiflazz:**
-- Cek saldo Digiflazz langsung dari dashboard
-- Tombol **Refresh Saldo** — memerlukan verifikasi PIN Admin sebelum saldo ditampilkan
+**Manajemen Order:**
+- Daftar semua order (paginated 50/halaman) dengan riwayat perubahan status
+- Konfirmasi manual order pending ke Digiflazz
+- Sinkronisasi status manual dari Digiflazz untuk order yang statusnya stuck
 
----
-
-### 5. 📋 Riwayat Transaksi Member
-Member dapat memantau semua pesanannya secara mandiri tanpa perlu menghubungi admin:
-
-- **Pencarian** berdasarkan Order ID, nama produk, atau nomor tujuan
-- **Filter status**: Semua / Menunggu / Diproses / Berhasil / Gagal
-- Detail lengkap setiap transaksi (produk, nomor tujuan, waktu, status)
+**Manajemen Produk:**
+- Update harga jual per produk (individual)
+- Bulk update margin — set margin nominal, terapkan ke semua produk sekaligus (`selling_price = cost_price + margin`)
+- Sync produk manual dari Digiflazz dengan filter kategori opsional
 
 ---
 
-### 6. 🔐 Custom Security Layer (Anti-Scraper)
+### 5. 📋 Cek Status Order Pelanggan
 
-**Route Obfuscation:**
-Path admin dikontrol penuh lewat `.env`. Bot scraper tidak bisa menemukan endpoint login admin karena URL-nya tidak pernah statis.
-
-```env
-# Path login jadi: /api/xK9mQR/login — hanya Anda yang tahu
-ADMIN_PATH_PREFIX=xK9mQR
-```
-
-**Double-Verification PIN:**
-Setiap aksi sensitif di Dashboard Admin (Refresh Saldo, Approve Transaksi) memerlukan PIN sebagai konfirmasi kedua. Jika PIN salah, sistem langsung menolak:
+Pelanggan dapat mengecek status ordernya secara mandiri tanpa perlu login, cukup dengan Order ID dan email yang digunakan saat order:
 
 ```
-✗ Gagal cek saldo: PIN Admin Salah
+POST /api/orders/{orderId}
+Body: { "email": "pelanggan@email.com" }
 ```
+
+Sistem memverifikasi kepemilikan order via email (case-insensitive) sebelum menampilkan detail.
+
+---
+
+### 6. 🎫 Support Tiket
+
+Pelanggan dapat mengirim pesan support melalui:
+
+```
+POST /api/support/send
+```
+
+Sistem menyimpan pesan ke database terlebih dahulu sebelum meneruskan ke Telegram admin — data tidak hilang meskipun Telegram sedang error. Setiap tiket mendapat ID unik format `SUP000001`.
+
+```
+GET /api/support/contacts
+```
+Mengembalikan info kontak WhatsApp, Telegram, dan email support yang dapat dikonfigurasi via `.env`.
 
 ---
 
 ### 7. 📧 Email Notifikasi Otomatis
-Template email responsif dikirim ke member secara otomatis via Laravel Queue:
 
-| Trigger | Isi Email |
-|---|---|
-| **Order Berhasil** | Detail produk, SN/Token/Pulsa, waktu transaksi |
-| **Order Gagal** | Alasan kegagalan + instruksi refund otomatis |
+| Trigger | Metode | Detail |
+|---|---|---|
+| **Order Sukses** | Queue (async) | Job `SendOrderSuccessEmail` — retry otomatis 3x jika gagal |
+| **Order Gagal** | Sinkron langsung | Dikirim segera saat status berubah ke failed |
 
----
-
-### 8. 📡 Telegram Admin Alerts & Monitoring System
-
-Selain menerima tiket CS dari member, sistem juga mengirim **notifikasi otomatis ke admin** untuk setiap event penting yang terjadi di backend — tanpa admin perlu buka dashboard.
-
-#### 🔔 Notifikasi Status Transaksi
-Setiap perubahan status transaksi langsung dikirim ke Telegram admin secara real-time:
-
-**Processing:**
-```
-⏳ TRANSAKSI DIPROSES - FEEPAY.ID
-
-🗒️ Order ID  : TRX-20260301-042
-📦 Produk   : Pulsa Telkomsel 50.000
-👤 Member   : fee | 08123456789
-💰 Nominal  : Rp 52.000
-📡 Provider : Digiflazz
-
-🕐 Waktu    : 01 Mar 2026 14:32:10 WIB
-```
-
-**Success:**
-```
-✅ TRANSAKSI BERHASIL - FEEPAY.ID
-
-🗒️ Order ID  : TRX-20260301-042
-📦 Produk   : Pulsa Telkomsel 50.000
-👤 Member   : fee | 08123456789
-💰 Nominal  : Rp 52.000
-🔑 SN/Token : [terisi otomatis dari provider]
-
-🕐 Waktu    : 01 Mar 2026 14:32:18 WIB
-```
-
-**Failed:**
-```
-❌ TRANSAKSI GAGAL - FEEPAY.ID
-
-🗒️ Order ID  : TRX-20260301-043
-📦 Produk   : Pulsa XL 25.000
-👤 Member   : sfs | 08198765432
-💰 Nominal  : Rp 26.500
-⚠️ Alasan   : Nomor tujuan tidak valid
-
-🕐 Waktu    : 01 Mar 2026 14:35:02 WIB
-```
+Email sukses dikirim via Queue agar response API tetap cepat. Jika email gagal terkirim setelah 3 kali retry, kegagalan dicatat di log.
 
 ---
 
-#### 🚫 Provider Rejection Handling
-Deteksi dini jika Digiflazz menolak pesanan karena alasan tertentu. Admin langsung tahu tanpa harus cek satu per satu:
+### 8. 📡 Telegram Admin Alerts
 
+Notifikasi real-time ke Telegram admin untuk setiap event penting:
+
+**Order diproses ke Digiflazz:**
 ```
-🚫 PESANAN DITOLAK PROVIDER - FEEPAY.ID
-
-🗒️ Order ID  : TRX-20260301-044
-📦 Produk   : Token PLN 100.000
-👤 Member   : dvsdvsv | 0808123456
-
-❗ Alasan Penolakan:
-   Saldo Digiflazz tidak mencukupi
-   [atau: Harga produk tidak sesuai]
-   [atau: Nomor tujuan tidak ditemukan]
-
-⚡ Tindakan : Transaksi otomatis di-refund
-🕐 Waktu    : 01 Mar 2026 15:10:44 WIB
+⏳ TRANSAKSI DIPROSES
+----------------------------------
+Order ID: #FP3X8KMQRTWZ
+Produk: Pulsa Telkomsel 50.000
+Target: 08123456789
+Nominal: Rp 52.000
+----------------------------------
+Menunggu callback sukses...
 ```
 
-Kemungkinan alasan penolakan yang dideteksi sistem:
-- **Saldo habis** — Saldo Digiflazz tidak mencukupi untuk eksekusi order
-- **Harga tidak sesuai** — Harga produk berubah dari sisi provider
-- **Nomor tujuan salah** — ID/nomor target tidak valid atau tidak ditemukan
-
----
-
-#### 🔴 System Failure Recovery Alert
-Alert otomatis jika terjadi kegagalan koneksi API atau error kritis di server:
-
+**Transaksi sukses (via callback Digiflazz):**
 ```
-🔴 SYSTEM ERROR - FEEPAY.ID
-
-🖥️ Komponen : Digiflazz API
-❗ Error     : Connection timeout (30s)
-🗒️ Order ID  : TRX-20260301-045
-📋 Detail   : Failed to connect after 3 retries
-
-⚙️ Status   : Job masuk antrean retry otomatis
-🕐 Waktu    : 01 Mar 2026 16:02:11 WIB
+✅ NOTIFIKASI TRANSAKSI FEEPAY
+----------------------------------
+Status: SUKSES
+Produk: Pulsa Telkomsel 50.000
+Nominal: Rp 52.000
+Pembeli: pelanggan@email.com
+Order ID: #FP3X8KMQRTWZ
+SN: [serial number dari provider]
+----------------------------------
+Laporan otomatis sistem FEEPAY.ID
 ```
 
-Sistem akan otomatis mencoba retry sebelum menyerah dan mengirim alert ini ke admin.
-
----
-
-#### 🟡 Low Balance Monitoring
-Peringatan otomatis ketika saldo Digiflazz menyentuh batas minimum (threshold) yang ditentukan:
-
+**Transaksi gagal:**
 ```
-⚠️ PERINGATAN SALDO MENIPIS - FEEPAY.ID
-
-💳 Saldo Saat Ini : Rp 87.500
-🚨 Batas Minimum  : Rp 100.000
-
-❗ Saldo berada di bawah threshold!
-   Segera lakukan top-up saldo Digiflazz
-   untuk menghindari kegagalan transaksi.
-
-🕐 Waktu          : 01 Mar 2026 18:00:03 WIB
+❌ NOTIFIKASI TRANSAKSI FEEPAY
+----------------------------------
+Status: GAGAL
+Produk: Pulsa XL 25.000
+Nominal: Rp 26.500
+Pembeli: pelanggan@email.com
+Order ID: #FPABCDEFGHIJ
+Alasan: Nomor tujuan tidak valid
+----------------------------------
 ```
 
-Threshold dapat dikonfigurasi melalui `.env`:
-```env
-DIGIFLAZZ_LOW_BALANCE_THRESHOLD=100000
+**Provider reject order:**
+```
+⚠️ DIGIFLAZZ REJECTED
+----------------------------------
+Order ID: #FPABCDEFGHIJ
+SKU: xl-25000
+Target: 08198765432
+Pesan: Saldo tidak mencukupi
+----------------------------------
+Laporan otomatis FEEPAY.ID
 ```
 
----
-
-#### 📧 Asynchronous Email Notifications
-Email bukti transaksi ke member **tidak dikirim secara langsung** saat request berlangsung. Pengiriman dilempar ke **Laravel Queue** agar response API tetap cepat dan ringan:
-
+**System error:**
 ```
-Transaksi selesai
-      ↓
-Job email di-dispatch ke Queue (non-blocking)
-      ↓
-API langsung response ke member ← cepat ✅
-      ↓
-Queue Worker memproses email di background
-      ↓
-Email terkirim ke member (sukses / gagal)
+🚨 SYSTEM ERROR — placeOrder
+----------------------------------
+Order ID: #FPABCDEFGHIJ
+Error: Connection timeout
+----------------------------------
+Cek log Laravel di VPS segera!
 ```
 
-Ini memastikan pengalaman member tetap responsif meskipun server email sedang lambat.
-
----
-
-### 9. 🌙 Dark Mode
-Antarmuka mendukung mode gelap. Member dapat beralih antara Light Mode dan Dark Mode kapan saja melalui ikon di pojok kanan atas.
-
----
-
-## 🤖 Telegram CS Bot
-
-Bot Telegram berfungsi sebagai **sistem tiket support otomatis** untuk menangani keluhan dan pertanyaan member. Setiap pesan yang dikirim member ke bot akan dikonversi menjadi tiket support dan langsung diteruskan ke admin.
-
-### Cara Kerja
-
+**Saldo Digiflazz menipis** (otomatis saat cek saldo jika < Rp 100.000):
 ```
-Member kirim pesan ke bot Telegram FEEPAY.ID
-             ↓
-Sistem membuat tiket support (ID: SUP000XXX)
-             ↓
-Notifikasi tiket lengkap dikirim ke Telegram admin
-             ↓
-Admin membalas member secara manual
+💸 WARNING: SALDO TIPIS!
+----------------------------------
+Sisa Saldo: Rp 87.500
+----------------------------------
+Segera Top Up saldo Digiflazz!
 ```
 
-### Format Notifikasi Tiket (yang Diterima Admin)
-
+**Support tiket masuk dari pelanggan:**
 ```
 🔔 SUPPORT MESSAGE BARU - FEEPAY.ID
 
-🗒️ Ticket  : SUP000017
-👤 Nama    : nama_member
-📧 Email   : email@member.com
-✈️ Platform: Telegram
+Ticket: SUP000017
+Nama: nama_pelanggan
+Email: email@pelanggan.com
+Platform: Telegram
 
-💬 Pesan   :
-[isi pesan dari member]
+Pesan:
+[isi pesan dari pelanggan]
 
-🕐 Waktu   : 26 Feb 2026 16:38 WIB
+Waktu: 01 Mar 2026 16:38 WIB
 ```
 
-Setiap tiket memiliki ID unik yang dapat digunakan untuk melacak percakapan support.
+---
 
-### Cara Setup Bot Telegram
+### 9. 🔁 Idempotency Order
 
-**Langkah 1 — Buat Bot via BotFather:**
-```
-1. Buka Telegram → cari @BotFather
-2. Kirim: /newbot
-3. Ikuti instruksi (beri nama & username bot)
-4. Salin Bot Token yang diberikan
-```
+Untuk mencegah order duplikat akibat klik ganda atau request yang dikirim ulang, sistem mendukung header `X-Idempotency-Key`:
 
-**Langkah 2 — Dapatkan Chat ID:**
 ```
-1. Buka bot Anda, kirim sembarang pesan
-2. Akses di browser:
-   https://api.telegram.org/bot<TOKEN>/getUpdates
-3. Salin nilai "id" dari bagian "chat" di respons JSON
+POST /api/orders/create
+X-Idempotency-Key: unique-key-dari-frontend
 ```
 
-**Langkah 3 — Isi .env:**
-```env
-TELEGRAM_BOT_TOKEN=1234567890:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TELEGRAM_CHAT_ID=987654321
-```
+Jika order dengan key yang sama sudah pernah dibuat dalam 24 jam terakhir, sistem mengembalikan data order yang sama tanpa membuat order baru.
 
-**Langkah 4 — Daftarkan Webhook (Production):**
-```bash
-curl -X POST https://api.telegram.org/bot<TOKEN>/setWebhook \
-     -d url=https://yourdomain.com/api/telegram/webhook
-```
+---
+
+## 🔐 Keamanan Berlapis
+
+Sistem menerapkan *defense in depth* — multiple layer yang saling melengkapi:
+
+| Layer | Mekanisme | Keterangan |
+|---|---|---|
+| **1 — HTTPS** | `ForceHttps` middleware + HSTS | `max-age=31536000; includeSubDomains; preload` (production only) |
+| **2 — Security Headers** | `SecurityHeaders` middleware | CSP, X-Frame-Options DENY, X-Content-Type-Options, Referrer-Policy, Permissions-Policy. Server version fingerprint dihapus. |
+| **3 — Rate Limiting** | Throttle per-endpoint | Login admin: 5/menit. Support: 5/menit. Order & payment: 20/menit. Webhook: 100/menit. Produk & cek order: 60/menit. |
+| **4 — Auth Token** | Laravel Sanctum | Bearer Token, expire 24 jam, single session (token lama otomatis dihapus saat login baru) |
+| **5 — Secret Path** | `ADMIN_PATH_PREFIX` | Path admin tidak pernah statis, dikonfigurasi via `.env`. Throw `RuntimeException` di production jika tidak diset. |
+| **6 — Admin PIN** | `VerifyPinMiddleware` | Header `X-Admin-PIN` 6 digit. Rate limit 5 percobaan per 15 menit per IP. `hash_equals()` cegah timing attack. |
+| **7 — IP Whitelist** | `AdminIpWhitelist` middleware | Tersedia dan teregistrasi. Di production, blokir semua jika `ADMIN_ALLOWED_IPS` kosong. |
+| **8 — Webhook Signature** | MD5 + SHA-512 | Digiflazz: `MD5(username + api_key + ref_id)`. Midtrans: `SHA-512(order_id + status_code + gross_amount + server_key)`. Keduanya pakai `hash_equals()`. |
+| **9 — Race Condition** | `lockForUpdate()` | Di `confirm()` dan `processToDigiflazz()` untuk cegah double-processing order yang sama. |
+| **10 — Input Sanitize** | FormRequest + Midtrans sanitize | `$isSanitized = true`, `$is3ds = true`. Semua endpoint divalidasi via FormRequest atau `Validator`. |
 
 ---
 
 ## 📂 Struktur Endpoint API
 
-| Method | Endpoint | Fungsi | Akses |
-|---|---|---|---|
-| `GET` | `/api/products` | List semua produk aktif + kategori | Public |
-| `POST` | `/api/checkout` | Buat invoice transaksi baru | Auth Member |
-| `GET` | `/api/transactions` | Riwayat transaksi member | Auth Member |
-| `POST` | `/api/webhook/midtrans` | Terima notifikasi pembayaran Midtrans | Midtrans Server |
-| `POST` | `/api/telegram/webhook` | Terima pesan tiket support dari Telegram | Telegram Server |
-| `POST` | `/api/{prefix}/login` | Login Admin (path tersembunyi) | Secret |
-| `GET` | `/api/{prefix}/dashboard` | Statistik: pesanan, pending, revenue | Admin Only |
-| `GET` | `/api/{prefix}/products` | Kelola produk + harga + margin | Admin Only |
-| `POST` | `/api/{prefix}/products/margin` | Set margin global semua produk | Admin Only |
-| `POST` | `/api/{prefix}/products/sync` | Trigger sync produk dari Digiflazz | Admin Only |
-| `GET` | `/api/{prefix}/orders` | Semua transaksi masuk | Admin Only |
-| `POST` | `/api/{prefix}/approve` | Approve transaksi manual | Admin Only |
-| `GET` | `/api/{prefix}/balance` | Cek saldo Digiflazz (butuh PIN) | Admin Only |
+### Public Endpoints
 
-> `{prefix}` = nilai `ADMIN_PATH_PREFIX` di `.env`. Contoh: `ADMIN_PATH_PREFIX=xK9mQR` → login admin di `/api/xK9mQR/login`.
+| Method | Endpoint | Fungsi | Rate Limit |
+|---|---|---|---|
+| `GET` | `/api/health` | Health check API | — |
+| `GET` | `/api/products` | Daftar produk aktif (filter `?category=`) | 60/menit |
+| `POST` | `/api/orders/create` | Buat order baru | 20/menit |
+| `POST` | `/api/orders/{orderId}` | Cek status order (butuh `email` di body) | 60/menit |
+| `POST` | `/api/payments/midtrans/create` | Buat Snap Token untuk order | 20/menit |
+| `POST` | `/api/callback/digiflazz` | Webhook callback dari Digiflazz | 100/menit |
+| `POST` | `/api/midtrans/webhook` | Webhook notifikasi pembayaran Midtrans | 100/menit |
+| `POST` | `/api/support/send` | Kirim pesan support | 5/menit |
+| `GET` | `/api/support/contacts` | Info kontak support (WA, Telegram, Email) | 5/menit |
+| `POST` | `/api/admin/login` | Login admin | 5/menit |
+
+### Admin Endpoints — Auth Token Only
+
+| Method | Endpoint | Fungsi |
+|---|---|---|
+| `POST` | `/api/admin/logout` | Revoke token aktif |
+| `GET` | `/api/admin/me` | Info user yang sedang login |
+| `POST` | `/api/admin/refresh` | Refresh token (revoke lama, buat baru) |
+
+### Admin Endpoints — Token + PIN + Secret Path
+
+> Semua endpoint di bawah membutuhkan: Bearer Token + header `X-Admin-PIN` (6 digit) + `{secret}` sesuai nilai `ADMIN_PATH_PREFIX` di `.env`
+
+| Method | Endpoint | Fungsi |
+|---|---|---|
+| `GET` | `/api/admin/{secret}/dashboard/stats` | Statistik order & revenue (support filter `start_date`, `end_date`) |
+| `GET` | `/api/admin/{secret}/dashboard/products` | Statistik produk aktif/total per kategori |
+| `GET` | `/api/admin/{secret}/dashboard/balance` | Cek saldo Digiflazz real-time |
+| `GET` | `/api/admin/{secret}/orders` | Daftar semua order dengan riwayat status (paginated 50) |
+| `POST` | `/api/admin/{secret}/orders/{id}/confirm` | Konfirmasi & kirim order ke Digiflazz |
+| `POST` | `/api/admin/{secret}/orders/{orderId}/sync` | Sinkronisasi status order dari Digiflazz |
+| `POST` | `/api/admin/{secret}/products/sync` | Sync katalog produk dari Digiflazz (opsional `?category=`) |
+| `POST` | `/api/admin/{secret}/products/bulk-margin` | Set margin nominal ke semua produk (`selling_price = cost_price + margin`) |
+| `PUT` | `/api/admin/{secret}/products/{id}` | Update harga jual satu produk |
+
+---
+
+## 🗄️ Struktur Database
+
+### Tabel `products`
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | bigint | Primary key |
+| `sku` | string | SKU unik dari Digiflazz |
+| `name` | string | Nama produk |
+| `category` | string | Kategori (Pulsa, Data, PLN, dll.) |
+| `brand` | string (nullable) | Brand/operator, penting untuk filter Game |
+| `cost_price` | decimal(15,2) | Harga modal dari Digiflazz |
+| `selling_price` | decimal(15,2) | Harga jual ke pelanggan |
+| `status` | string | `active` / `inactive` |
+| `stock` | string | Default: `unlimited` |
+| `type` | string | `standard` / tipe lain untuk bedakan UI |
+
+*Computed attribute:* `profit_margin` = `selling_price - cost_price` (tidak disimpan di DB)
+
+### Tabel `orders`
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | bigint | Primary key |
+| `order_id` | string | ID unik format `FP` + 12 karakter random uppercase |
+| `sku` | string | SKU produk yang dipesan |
+| `product_name` | string | Nama produk (snapshot saat order) |
+| `target_number` | string | Nomor HP / ID akun game |
+| `zone_id` | string (nullable) | Server ID untuk game (Mobile Legends, dll.) |
+| `customer_email` | string | Email pelanggan (disimpan lowercase) |
+| `total_price` | decimal(15,2) | Harga dari DB saat order dibuat |
+| `status` | enum | `pending` / `processing` / `success` / `failed` |
+| `sn` | string (nullable) | Serial Number / Token dari provider |
+| `confirmed_by` | bigint (nullable) | ID admin yang konfirmasi |
+| `confirmed_at` | timestamp (nullable) | Waktu konfirmasi (juga sebagai flag anti double-send) |
+| `midtrans_snap_token` | string (nullable) | Snap Token Midtrans |
+| `midtrans_transaction_id` | string (nullable) | Transaction ID dari Midtrans |
+| `midtrans_payment_type` | string (nullable) | Metode bayar (VA, QRIS, dll.) |
+| `midtrans_transaction_status` | string (nullable) | Status dari Midtrans |
+| `midtrans_transaction_time` | timestamp (nullable) | Waktu transaksi Midtrans |
+
+### Tabel `order_status_histories`
+
+Mencatat setiap perubahan status order secara lengkap.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | bigint | Primary key |
+| `order_id` | bigint (FK) | Relasi ke tabel orders |
+| `status` | enum | Status baru: `pending` / `processing` / `success` / `failed` |
+| `note` | text (nullable) | Catatan perubahan status |
+| `changed_by` | bigint (nullable, FK) | ID admin yang mengubah (null jika otomatis) |
+
+### Tabel `support_messages`
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | bigint | Primary key (juga dipakai sebagai ticket ID: `SUP000001`) |
+| `user_name` | string (nullable) | Nama pengirim |
+| `user_email` | string (nullable) | Email pengirim |
+| `message` | text | Isi pesan |
+| `platform` | enum | `whatsapp` / `telegram` |
+| `status` | enum | `pending` / `sent` / `failed` |
+| `order_id` | string (nullable) | Order ID terkait (jika ada) |
+
+### Tabel `users`
+
+Tabel admin. Diisi via seeder dengan data dari `.env` (`ADMIN_EMAIL`, `ADMIN_SEED_PASSWORD`).
 
 ---
 
@@ -456,34 +434,64 @@ curl -X POST https://api.telegram.org/bot<TOKEN>/setWebhook \
 backend-FEEPAY.ID/
 ├── app/
 │   ├── Console/Commands/
-│   │   └── SyncProducts.php          # Artisan: sync produk dari Digiflazz
-│   ├── Http/Controllers/
-│   │   ├── ProductController.php     # CRUD & sinkronisasi produk
-│   │   ├── CheckoutController.php    # Pembuatan invoice & integrasi Midtrans
-│   │   ├── TransactionController.php # Riwayat & status transaksi member
-│   │   ├── AdminController.php       # Dashboard, approve, cek saldo
-│   │   ├── WebhookController.php     # Handler webhook Midtrans
-│   │   └── TelegramController.php    # Handler tiket CS via Telegram
-│   ├── Http/Middleware/
-│   │   └── AdminPinMiddleware.php    # Verifikasi PIN untuk aksi sensitif
+│   │   └── SyncDigiflazz.php              # Artisan command: php artisan digiflazz:sync
+│   ├── Enums/
+│   │   └── OrderStatus.php                # Enum: pending, processing, success, failed
+│   ├── Http/
+│   │   ├── Controllers/Api/
+│   │   │   ├── AuthController.php         # Login, logout, me, refresh token
+│   │   │   ├── OrderController.php        # Buat order, konfirmasi, sync, list, cek status
+│   │   │   ├── MidtransPaymentController.php  # Buat Snap Token, handle webhook Midtrans
+│   │   │   ├── CallbackController.php     # Handle callback dari Digiflazz
+│   │   │   ├── ProductController.php      # List produk, sync, bulk margin, update harga
+│   │   │   ├── DashboardController.php    # Statistik, cek saldo, stats produk
+│   │   │   └── SupportController.php      # Kirim tiket support, info kontak
+│   │   ├── Middleware/
+│   │   │   ├── AdminIpWhitelist.php       # Whitelist IP admin
+│   │   │   ├── ForceHttps.php             # Redirect HTTP → HTTPS
+│   │   │   ├── SecurityHeaders.php        # Set security headers (CSP, HSTS, dll.)
+│   │   │   └── VerifyPinMiddleware.php    # Verifikasi X-Admin-PIN (6 digit, rate limited)
+│   │   ├── Requests/
+│   │   │   ├── AdminLoginRequest.php      # Validasi form login admin
+│   │   │   ├── StoreOrderRequest.php      # Validasi form buat order
+│   │   │   └── ConfirmOrderRequest.php    # Validasi form konfirmasi order
+│   │   └── Kernel.php                     # Registrasi middleware
 │   ├── Jobs/
-│   │   ├── ProcessOrderJob.php       # Eksekusi order ke Digiflazz (background)
-│   │   └── SendEmailJob.php          # Kirim email notifikasi ke member
+│   │   └── SendOrderSuccessEmail.php      # Job queue: kirim email sukses (retry 3x, timeout 60s)
+│   ├── Mail/
+│   │   ├── OrderSuccess.php               # Email template order berhasil
+│   │   └── OrderFailed.php                # Email template order gagal
 │   ├── Models/
-│   │   ├── Transaction.php
-│   │   ├── Product.php
-│   │   └── SupportTicket.php
+│   │   ├── Order.php                      # Model order dengan scopes & helpers
+│   │   ├── Product.php                    # Model produk dengan computed profit_margin
+│   │   ├── OrderStatusHistory.php         # Model riwayat perubahan status
+│   │   ├── SupportMessage.php             # Model tiket support
+│   │   └── User.php                       # Model admin
+│   ├── Providers/
+│   │   └── AppServiceProvider.php
 │   └── Services/
-│       ├── DigiflazzService.php      # Wrapper API Digiflazz
-│       ├── MidtransService.php       # Wrapper Payment Gateway Midtrans
-│       └── TelegramService.php       # Kirim & terima pesan Telegram
+│       ├── DigiflazzService.php           # Wrapper API Digiflazz (price list, placeOrder, checkStatus, getBalance)
+│       ├── MidtransService.php            # Wrapper Midtrans (createSnapToken, verifySignature, getNotification)
+│       └── TelegramService.php            # Static notify() — kirim alert ke admin
+├── config/
+│   ├── feepay.php                         # Config custom: margin, admin_path, admin_pin, support contacts
+│   ├── midtrans.php                       # Config Midtrans
+│   └── ...
 ├── database/
-│   ├── migrations/                   # Skema: transactions, products, tickets
-│   └── seeders/                      # Data awal produk & akun admin
-├── frontend/                         # Source code frontend (Vite)
-├── resources/views/emails/           # Template email order sukses & gagal
-├── routes/api.php                    # Semua definisi route API
-├── .env.example                      # Template konfigurasi
+│   ├── migrations/                        # Skema: products, orders, order_status_histories, support_messages, users, dll.
+│   └── seeders/
+│       ├── AdminSeeder.php                # Seed akun admin dari .env
+│       └── DatabaseSeeder.php
+├── resources/views/
+│   ├── emails/
+│   │   ├── order-success.blade.php        # Template email order sukses
+│   │   └── order-failed.blade.php         # Template email order gagal
+│   └── payment/
+│       └── checkout.blade.php             # Halaman checkout (Midtrans Snap)
+├── routes/
+│   ├── api.php                            # Semua definisi route API
+│   └── web.php                            # Route web (redirect login ke API)
+├── .env.example                           # Template konfigurasi lengkap
 └── artisan
 ```
 
@@ -519,7 +527,7 @@ npm install
 
 ```bash
 cp .env.example .env
-# Edit .env dan isi semua nilai yang diperlukan
+# Edit .env dan isi semua nilai yang diperlukan (lihat bagian Environment Variables)
 ```
 
 ### Langkah 3 — Generate Key & Migrasi
@@ -528,6 +536,8 @@ cp .env.example .env
 php artisan key:generate
 php artisan migrate --seed
 ```
+
+> Seeder akan membuat akun admin dari `ADMIN_EMAIL` dan `ADMIN_SEED_PASSWORD` di `.env`.
 
 ### Langkah 4 — Jalankan Queue Worker
 
@@ -551,14 +561,14 @@ npm run dev
 # Terminal 3 — Tunnel untuk Webhook Midtrans & Telegram
 ngrok http 8000
 
-# Terminal 4 — Scheduler
+# Terminal 4 — Scheduler (auto-sync produk)
 php artisan schedule:work
 
-# Terminal 5 — Queue Worker
+# Terminal 5 — Queue Worker (email notifikasi)
 php artisan queue:work
 ```
 
-> Setelah ngrok aktif, set URL tunnel sebagai Webhook URL di dashboard Midtrans dan Telegram.
+> Setelah ngrok aktif, set URL tunnel sebagai Webhook URL di dashboard Midtrans.
 
 ### Mode Production — Server
 
@@ -567,14 +577,14 @@ php artisan queue:work
 npm run build
 ```
 
-**2. Cron Job:**
+**2. Cron Job (scheduler):**
 ```bash
 crontab -e
 # Tambahkan:
 * * * * * cd /var/www/feepay && php artisan schedule:run >> /dev/null 2>&1
 ```
 
-**3. Supervisor** — agar queue jalan 24/7:
+**3. Supervisor** — agar queue worker jalan 24/7 dan auto-restart:
 
 Buat `/etc/supervisor/conf.d/feepay-worker.conf`:
 ```ini
@@ -627,7 +637,7 @@ server {
 
 ## ⚙️ Jadwal Auto-Sync Produk
 
-Produk dari Digiflazz disinkronkan otomatis **4x sehari**:
+Produk dari Digiflazz disinkronkan otomatis **4x sehari** via Laravel Scheduler:
 
 | Jadwal | Keterangan |
 |---|---|
@@ -636,96 +646,130 @@ Produk dari Digiflazz disinkronkan otomatis **4x sehari**:
 | 12:00 | Sync siang |
 | 18:00 | Sync sore |
 
-> ⚠️ Harga jual yang sudah diedit manual admin **tidak akan ditimpa** oleh proses sync. Hanya produk baru dan status aktif/nonaktif yang diperbarui.
+**Proteksi harga:** Harga jual yang masih di atas harga modal **tidak akan ditimpa**. Hanya produk baru yang mendapat harga default (`cost_price + FEEPAY_MARGIN`). Jika harga modal naik melebihi harga jual, selling price otomatis disesuaikan.
 
 **Trigger manual via terminal:**
 ```bash
-php artisan app:sync-products
+php artisan digiflazz:sync
+# Opsional filter kategori:
+php artisan digiflazz:sync --category="Pulsa"
 ```
-**Trigger manual via UI:** Klik tombol **Sync Products** di Dashboard Admin (memerlukan verifikasi PIN).
+
+**Trigger manual via API:** `POST /api/admin/{secret}/products/sync` (memerlukan auth admin + PIN)
 
 ---
 
-## 🔐 Environment Variables
+## 🔧 Environment Variables
 
 ```env
 # ─── Aplikasi ────────────────────────────────────────────────
 APP_NAME="FEEPAY.ID"
 APP_ENV=production
-APP_DEBUG=false             # WAJIB false di server live
-APP_URL=https://yourdomain.com
+APP_KEY=base64:GENERATE_DENGAN_php_artisan_key:generate
+APP_DEBUG=false             # WAJIB false di production
+APP_URL=https://api.feepay.web.id
 
 # ─── Database ────────────────────────────────────────────────
 DB_CONNECTION=mysql
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_DATABASE=feepay_db
-DB_USERNAME=root
-DB_PASSWORD=
+DB_USERNAME=feepay_user
+DB_PASSWORD=PASSWORD_KUAT_MIN_16_KARAKTER
 
 # ─── Keamanan Admin ──────────────────────────────────────────
-ADMIN_PATH_PREFIX=ganti_ini_string_acak   # Ganti berkala!
-ADMIN_PIN=123456                           # PIN verifikasi aksi sensitif
+ADMIN_PATH_PREFIX=STRING_ACAK_PANJANG_MIN_12_KARAKTER  # WAJIB diset. Throw error di production jika kosong.
+FEEPAY_ADMIN_PIN=6_DIGIT_BUKAN_TANGGAL_LAHIR           # WAJIB diset.
+ADMIN_ALLOWED_IPS=IP_VPS_KAMU,IP_RUMAH_KAMU            # Whitelist IP admin
 
 # ─── Digiflazz ───────────────────────────────────────────────
 DIGIFLAZZ_USERNAME=username_digiflazz_anda
-DIGIFLAZZ_API_KEY=api_key_production_dari_digiflazz
+DIGIFLAZZ_API_KEY=api_key_dari_dashboard_digiflazz
+DIGIFLAZZ_BASE_URL=https://api.digiflazz.com/v1
 
 # ─── Midtrans ────────────────────────────────────────────────
 MIDTRANS_SERVER_KEY=Mid-server-xxxxxxxxxxxxxxxxxxxx
 MIDTRANS_CLIENT_KEY=Mid-client-xxxxxxxxxxxxxxxxxxxx
-MIDTRANS_IS_PRODUCTION=false   # Ganti true saat go-live
+MIDTRANS_IS_PRODUCTION=true   # Ganti false saat development/sandbox
 
-# ─── Telegram CS Bot ─────────────────────────────────────────
+# ─── Telegram ────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN=1234567890:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TELEGRAM_CHAT_ID=987654321
 
 # ─── Email ───────────────────────────────────────────────────
 MAIL_MAILER=smtp
-MAIL_HOST=smtp.gmail.com
+MAIL_HOST=smtp-relay.brevo.com   # Atau smtp.gmail.com
 MAIL_PORT=587
-MAIL_USERNAME=emailanda@gmail.com
-MAIL_PASSWORD=app_password_gmail   # Buat di: myaccount.google.com/apppasswords
+MAIL_USERNAME=email_smtp_anda
+MAIL_PASSWORD=password_smtp_anda
 MAIL_ENCRYPTION=tls
-MAIL_FROM_ADDRESS=emailanda@gmail.com
+MAIL_FROM_ADDRESS="email@domain.com"
 MAIL_FROM_NAME="FEEPAY.ID"
 
-# ─── Queue ────────────────────────────────────────────────────
-# ─── Monitoring & Alert ──────────────────────────────────────
-DIGIFLAZZ_LOW_BALANCE_THRESHOLD=100000  # Alert jika saldo di bawah nilai ini (Rupiah)
+# ─── Support Contacts ────────────────────────────────────────
+SUPPORT_WHATSAPP=62XXXXXXXXXX
+SUPPORT_TELEGRAM=@USERNAME_TELEGRAM
+SUPPORT_EMAIL=support@feepay.id
 
-# ─── Queue ────────────────────────────────────────────────────
+# ─── Margin Default ──────────────────────────────────────────
+FEEPAY_MARGIN=2000   # Margin default (Rp) untuk produk baru saat sync
+
+# ─── Queue & Cache ───────────────────────────────────────────
 QUEUE_CONNECTION=database
+CACHE_DRIVER=file
+
+# ─── Session & Sanctum ───────────────────────────────────────
+SESSION_DRIVER=database
+SESSION_LIFETIME=120
+SESSION_DOMAIN=.feepay.web.id
+SANCTUM_STATEFUL_DOMAINS=feepay.web.id,api.feepay.web.id
+SANCTUM_TOKEN_EXPIRATION=1440   # Token expire 24 jam
+
+# ─── Seeder ──────────────────────────────────────────────────
+ADMIN_EMAIL=emailkamu@domain.com
+ADMIN_SEED_PASSWORD=PASSWORD_KUAT_UNTUK_AKUN_ADMIN
+
+# ─── Logging ─────────────────────────────────────────────────
+LOG_CHANNEL=single
+LOG_LEVEL=error   # Di production cukup error saja
 ```
 
 ---
 
 ## 🛡️ Security Best Practices
 
-**1. Sembunyikan & Rotasi Path Admin**
-Ganti `ADMIN_PATH_PREFIX` dengan string acak yang kuat. Rotasi berkala jika ada indikasi kebocoran URL.
+**1. Wajib Set `ADMIN_PATH_PREFIX` dan `FEEPAY_ADMIN_PIN`**
+Aplikasi akan throw `RuntimeException` di production jika keduanya tidak diset. Gunakan string acak panjang untuk path prefix.
 
-**2. APP_DEBUG Wajib false di Production**
+**2. `APP_DEBUG=false` di Production**
 Jika `true`, Laravel menampilkan stack trace dan konfigurasi server kepada publik — celah serius.
 
-**3. Gunakan App Password untuk Gmail**
-Jangan pakai password Gmail biasa. Buat App Password khusus:
-`https://myaccount.google.com/apppasswords`
+**3. Set `ADMIN_ALLOWED_IPS`**
+Middleware IP whitelist sudah tersedia. Di production, set IP VPS dan IP admin agar endpoint admin tidak bisa diakses dari IP sembarang.
 
-**4. Permission Folder yang Benar:**
+**4. Gunakan App Password untuk Gmail**
+Jangan pakai password Gmail biasa. Buat App Password khusus:
+```
+https://myaccount.google.com/apppasswords
+```
+
+**5. Permission Folder yang Benar:**
 ```bash
 chmod -R 775 storage bootstrap/cache
 chown -R www-data:www-data storage bootstrap/cache
 ```
 
-**5. Gunakan HTTPS**
-Semua webhook (Midtrans & Telegram) memerlukan HTTPS. Gunakan Let's Encrypt:
+**6. Gunakan HTTPS**
+Semua webhook (Midtrans) memerlukan HTTPS. Gunakan Let's Encrypt:
 ```bash
 sudo certbot --nginx -d yourdomain.com
 ```
 
-**6. Ganti PIN Admin Berkala**
-PIN melindungi aksi paling sensitif. Jangan gunakan PIN yang mudah ditebak.
+**7. Rotasi `ADMIN_PATH_PREFIX` Berkala**
+Ganti path prefix secara berkala, terutama jika ada indikasi kebocoran URL admin.
+
+**8. Naikkan Threshold Alert Saldo**
+Default alert saldo menipis adalah Rp 100.000. Untuk traffic lebih tinggi, pertimbangkan menaikkan nilai ini sesuai rata-rata transaksi harian.
 
 ---
 
