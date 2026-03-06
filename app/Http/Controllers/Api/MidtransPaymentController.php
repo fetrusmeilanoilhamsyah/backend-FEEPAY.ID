@@ -37,6 +37,13 @@ class MidtransPaymentController extends Controller
             }
 
             $order = Order::where('order_id', $request->order_id)->first();
+
+            // ✅ FIXED: Reuse snap token lama kalau sudah ada
+            // Mencegah error "order_id has already been taken" dari Midtrans
+            if ($order->midtrans_snap_token) {
+                return response()->json(['success' => true, 'data' => ['snap_token' => $order->midtrans_snap_token, 'order_id' => $order->order_id]], 200);
+            }
+
             $product = Product::where('sku', $order->sku)->first();
             $amount = (int) $product->selling_price;
 
