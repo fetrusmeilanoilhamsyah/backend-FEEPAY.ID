@@ -8,6 +8,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Enums\OrderStatus;
 use App\Mail\OrderFailed;
+use App\Services\TelegramService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -119,6 +120,18 @@ class MidtransPaymentController extends Controller
 
             $order->update(['confirmed_at' => now()]);
             $order->logStatusChange(OrderStatus::PROCESSING, 'Order sent to Digiflazz');
+
+            // ✅ Notif Telegram ke admin — order dikirim ke Digiflazz
+            TelegramService::notify("
+📦 *ORDER DIKIRIM KE DIGIFLAZZ*
+----------------------------------
+*Order ID:* #{$order->order_id}
+*Produk:* {$order->product_name}
+*Target:* {$order->target_number}
+*Nominal:* Rp " . number_format($order->total_price, 0, ',', '.') . "
+----------------------------------
+_Menunggu konfirmasi dari provider..._
+            ");
 
         } catch (Exception $e) {
             Log::error('Digiflazz Error: ' . $e->getMessage());
