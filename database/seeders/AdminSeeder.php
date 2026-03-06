@@ -39,7 +39,7 @@ class AdminSeeder extends Seeder
         );
 
         $this->command->info('✅ Admin user created:');
-        $this->command->info('   Email: admin@feepay.id');
+        $this->command->info('   Email: fetrusmeilanoilham@gmail.com');
         $this->command->info('   Password: (from ADMIN_SEED_PASSWORD in .env)');
         $this->command->warn('   Delete ADMIN_SEED_PASSWORD from .env after seeding!');
     }
