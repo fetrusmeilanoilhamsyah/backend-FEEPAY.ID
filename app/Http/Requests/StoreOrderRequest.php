@@ -19,26 +19,28 @@ class StoreOrderRequest extends FormRequest
         return [
             'sku' => 'required|string|exists:products,sku',
 
-            // Hanya boleh angka, huruf, dan tanda minus — tidak boleh karakter injection
+            // Hanya boleh angka, huruf, dan tanda minus — cegah injection
             'target_number' => ['required', 'string', 'max:50', 'regex:/^[a-zA-Z0-9\-]+$/'],
 
             'customer_email' => 'required|email|max:255',
 
-            // zone_id: opsional, hanya angka (server ID game seperti ML, GI)
+            // zone_id: opsional, hanya angka (Server ID game seperti ML, GI, HoK)
             'zone_id' => [
                 'nullable',
                 'string',
                 'max:20',
                 'regex:/^\d+$/',
                 function ($attribute, $value, $fail) {
-                    if (!$value) return;
-
                     $product = Product::where('sku', $this->sku)->first();
                     if (!$product) return;
 
-                    // Game yang wajib zone_id
-                    $needsZone = ['Mobile Legends', 'Genshin Impact', 'Honor of Kings'];
-                    if ($product->category === 'Games' && in_array($product->brand, $needsZone) && empty($value)) {
+                    // Game yang wajib zone_id — case-insensitive agar aman dari variasi nama Digiflazz
+                    $needsZone = ['mobile legends', 'genshin impact', 'honor of kings'];
+                    if (
+                        $product->category === 'Games' &&
+                        in_array(strtolower($product->brand ?? ''), $needsZone) &&
+                        empty($value)
+                    ) {
                         $fail('ID Server wajib diisi untuk produk ini.');
                     }
                 },
@@ -59,7 +61,7 @@ class StoreOrderRequest extends FormRequest
         ];
     }
 
-    protected function failedValidation(Validator $validator)
+    protected function failedValidation(Validator $validator): void
     {
         throw new HttpResponseException(response()->json([
             'success' => false,
