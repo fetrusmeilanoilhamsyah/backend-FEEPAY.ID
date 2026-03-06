@@ -10,57 +10,46 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 
 class SendOrderSuccessEmail implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $tries = 3;
-    public $timeout = 60;
+    public int $tries   = 3;
+    public int $timeout = 60;
 
-    /**
-     * Create a new job instance.
-     */
     public function __construct(
-        public Order $order,
+        public Order   $order,
         public Product $product
     ) {}
 
-    /**
-     * Execute the job.
-     */
     public function handle(): void
     {
         try {
             Mail::to($this->order->customer_email)
                 ->send(new OrderSuccess($this->order, $this->product));
 
-            Log::info('Order success email sent via queue', [
+            Log::info('Email sukses terkirim via queue', [
                 'order_id' => $this->order->order_id,
-                'email' => $this->order->customer_email,
+                'email'    => $this->order->customer_email,
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Failed to send order success email via queue', [
+            Log::error('Gagal kirim email sukses via queue', [
                 'order_id' => $this->order->order_id,
-                'error' => $e->getMessage(),
+                'error'    => $e->getMessage(),
             ]);
-
-            // Re-throw to trigger retry
-            throw $e;
+            throw $e; // Trigger retry
         }
     }
 
-    /**
-     * Handle a job failure.
-     */
     public function failed(\Throwable $exception): void
     {
-        Log::error('Order success email job failed permanently', [
+        Log::error('Email sukses gagal permanen setelah semua retry', [
             'order_id' => $this->order->order_id,
-            'error' => $exception->getMessage(),
+            'error'    => $exception->getMessage(),
         ]);
     }
 }

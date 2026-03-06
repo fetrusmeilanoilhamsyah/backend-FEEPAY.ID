@@ -21,17 +21,11 @@ class OrderStatusHistory extends Model
         'status' => OrderStatus::class,
     ];
 
-    /**
-     * Get the order that owns this history
-     */
     public function order()
     {
         return $this->belongsTo(Order::class);
     }
 
-    /**
-     * Get the admin who made this change
-     */
     public function changedBy()
     {
         return $this->belongsTo(User::class, 'changed_by');

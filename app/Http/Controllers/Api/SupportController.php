@@ -4,18 +4,17 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\SupportMessage;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class SupportController extends Controller
 {
     /**
-     * Send support message
-     *
      * POST /api/support/send
      */
-    public function send(Request $request)
+    public function send(Request $request): JsonResponse
     {
         $request->validate([
             'name'     => 'nullable|string|max:100',
@@ -27,18 +26,16 @@ class SupportController extends Controller
 
         try {
             $support = SupportMessage::create([
-                'user_name'  => $request->name ?? 'Guest',
-                'user_email' => $request->email ?? 'no-email@feepay.id',
+                'user_name'  => $request->name     ?? 'Guest',
+                'user_email' => $request->email    ?? 'no-email@feepay.id',
                 'message'    => $request->message,
                 'platform'   => $request->platform ?? 'whatsapp',
                 'order_id'   => $request->order_id,
                 'status'     => 'pending',
             ]);
 
-            Log::info('Support message received', [
+            Log::info('Support message diterima', [
                 'id'       => $support->id,
-                'name'     => $request->name,
-                'email'    => $request->email,
                 'platform' => $request->platform,
                 'ip'       => $request->ip(),
             ]);
@@ -47,7 +44,7 @@ class SupportController extends Controller
                 $this->sendTelegramNotification($support);
                 $support->update(['status' => 'sent']);
             } catch (\Exception $e) {
-                Log::error('Failed to send Telegram notification', [
+                Log::error('Gagal kirim notifikasi Telegram support', [
                     'error'      => $e->getMessage(),
                     'support_id' => $support->id,
                 ]);
@@ -64,11 +61,7 @@ class SupportController extends Controller
             ], 200);
 
         } catch (\Exception $e) {
-            Log::error('Support send failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
+            Log::error('SupportController::send gagal', ['error' => $e->getMessage()]);
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal mengirim pesan. Silakan coba lagi.',
@@ -77,89 +70,10 @@ class SupportController extends Controller
     }
 
     /**
-     * Send Telegram notification to admin
-     */
-    private function sendTelegramNotification(SupportMessage $support)
-    {
-        // ✅ FIXED: env() → config()
-        $botToken = config('services.telegram.bot_token');
-        $chatId   = config('services.telegram.chat_id');
-
-        if (!$botToken || !$chatId) {
-            throw new \Exception('Telegram configuration missing');
-        }
-
-        $ticketId       = 'SUP' . str_pad($support->id, 6, '0', STR_PAD_LEFT);
-        $platformEmoji  = $support->platform === 'telegram' ? '✈️' : '💬';
-
-        $escapedTicketId = $this->escapeMarkdown($ticketId);
-        $escapedName     = $this->escapeMarkdown($support->user_name);
-        $escapedEmail    = $this->escapeMarkdown($support->user_email);
-        $escapedPlatform = $this->escapeMarkdown(ucfirst($support->platform));
-        $escapedMessage  = $this->escapeMarkdown($support->message);
-        $escapedTime     = $this->escapeMarkdown($support->created_at->format('d M Y H:i') . ' WIB');
-
-        $message = "🔔 *SUPPORT MESSAGE BARU \\- FEEPAY\\.ID*\n\n" .
-                   "📋 *Ticket:* `{$escapedTicketId}`\n" .
-                   "👤 *Nama:* {$escapedName}\n" .
-                   "📧 *Email:* {$escapedEmail}\n" .
-                   "{$platformEmoji} *Platform:* {$escapedPlatform}\n\n" .
-                   "💬 *Pesan:*\n{$escapedMessage}\n\n" .
-                   "🕒 *Waktu:* {$escapedTime}";
-
-        $url = "https://api.telegram.org/bot{$botToken}/sendMessage";
-
-        $response = Http::timeout(10)->post($url, [
-            'chat_id'    => $chatId,
-            'text'       => $message,
-            'parse_mode' => 'MarkdownV2',
-        ]);
-
-        if (!$response->successful()) {
-            throw new \Exception('Telegram API error: ' . $response->body());
-        }
-
-        Log::info('Telegram notification sent', [
-            'ticket_id' => $ticketId,
-            'chat_id'   => $chatId,
-        ]);
-
-        return $response->json();
-    }
-
-    /**
-     * Escape special characters for Telegram MarkdownV2
-     */
-    private function escapeMarkdown($text)
-    {
-        if (empty($text)) {
-            return '';
-        }
-
-        $specialChars = [
-            '\\', '_', '*', '[', ']', '(', ')', '~', '`',
-            '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'
-        ];
-
-        $text = str_replace('\\', '\\\\', $text);
-
-        foreach ($specialChars as $char) {
-            if ($char !== '\\') {
-                $text = str_replace($char, '\\' . $char, $text);
-            }
-        }
-
-        return $text;
-    }
-
-    /**
-     * Get contact information
-     *
      * GET /api/support/contacts
      */
-    public function getContacts()
+    public function getContacts(): JsonResponse
     {
-        // ✅ FIXED: env() → config()
         $wa       = config('feepay.support_whatsapp', '6281234567890');
         $telegram = config('feepay.support_telegram', 'feepay_support');
         $email    = config('feepay.support_email', 'support@feepay.id');
@@ -180,5 +94,61 @@ class SupportController extends Controller
                 'email' => $email,
             ],
         ], 200);
+    }
+
+    // ─── Private ──────────────────────────────────────────────────────────────
+
+    private function sendTelegramNotification(SupportMessage $support): void
+    {
+        $botToken = config('services.telegram.bot_token');
+        $chatId   = config('services.telegram.chat_id');
+
+        if (!$botToken || !$chatId) {
+            throw new \Exception('Konfigurasi Telegram belum diset.');
+        }
+
+        $ticketId      = 'SUP' . str_pad($support->id, 6, '0', STR_PAD_LEFT);
+        $platformEmoji = $support->platform === 'telegram' ? '✈️' : '💬';
+
+        // Escape untuk MarkdownV2
+        $escapedTicket   = $this->escapeMarkdown($ticketId);
+        $escapedName     = $this->escapeMarkdown($support->user_name);
+        $escapedEmail    = $this->escapeMarkdown($support->user_email);
+        $escapedPlatform = $this->escapeMarkdown(ucfirst($support->platform));
+        $escapedMessage  = $this->escapeMarkdown($support->message);
+        $escapedTime     = $this->escapeMarkdown($support->created_at->format('d M Y H:i') . ' WIB');
+
+        $text = "🔔 *SUPPORT MESSAGE BARU \\- FEEPAY\\.ID*\n\n" .
+                "📋 *Ticket:* `{$escapedTicket}`\n" .
+                "👤 *Nama:* {$escapedName}\n" .
+                "📧 *Email:* {$escapedEmail}\n" .
+                "{$platformEmoji} *Platform:* {$escapedPlatform}\n\n" .
+                "💬 *Pesan:*\n{$escapedMessage}\n\n" .
+                "🕒 *Waktu:* {$escapedTime}";
+
+        $response = Http::timeout(10)->post("https://api.telegram.org/bot{$botToken}/sendMessage", [
+            'chat_id'    => $chatId,
+            'text'       => $text,
+            'parse_mode' => 'MarkdownV2',
+        ]);
+
+        if (!$response->successful()) {
+            throw new \Exception('Telegram API error: ' . $response->body());
+        }
+    }
+
+    private function escapeMarkdown(string $text): string
+    {
+        if (empty($text)) return '';
+
+        // Escape backslash dulu sebelum karakter lain
+        $text = str_replace('\\', '\\\\', $text);
+
+        $specialChars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
+        foreach ($specialChars as $char) {
+            $text = str_replace($char, '\\' . $char, $text);
+        }
+
+        return $text;
     }
 }

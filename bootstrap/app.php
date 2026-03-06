@@ -6,22 +6,19 @@ use Illuminate\Foundation\Configuration\Middleware;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
-        web: __DIR__.'/../routes/web.php',
-        api: __DIR__.'/../routes/api.php',
-        commands: __DIR__.'/../routes/console.php',
-        health: '/up',
+        web:      __DIR__ . '/../routes/web.php',
+        api:      __DIR__ . '/../routes/api.php',
+        commands: __DIR__ . '/../routes/console.php',
+        health:   '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        // Register middleware aliases
         $middleware->alias([
             'verify.pin' => \App\Http\Middleware\VerifyPinMiddleware::class,
             'admin.ip'   => \App\Http\Middleware\AdminIpWhitelist::class,
         ]);
 
-        // Matikan CSRF untuk route API agar Vercel tidak diblokir (Error 419)
-        $middleware->validateCsrfTokens(except: [
-            'api/*',
-        ]);
+        // Nonaktifkan CSRF untuk semua route API
+        $middleware->validateCsrfTokens(except: ['api/*']);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //

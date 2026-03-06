@@ -12,7 +12,7 @@ class SupportMessage extends Model
         'message',
         'platform',
         'status',
-        'order_id'
+        'order_id',
     ];
 
     protected $casts = [

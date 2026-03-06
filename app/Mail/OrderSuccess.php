@@ -3,50 +3,35 @@
 namespace App\Mail;
 
 use App\Models\Order;
-use App\Models\Product;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class OrderSuccess extends Mailable
+class OrderFailed extends Mailable
 {
     use Queueable, SerializesModels;
 
-    /**
-     * Create a new message instance.
-     */
     public function __construct(
-        public Order $order,
-        public Product $product
+        public Order  $order,
+        public string $reason = 'Terjadi kesalahan saat memproses pesanan Anda.'
     ) {}
 
-    /**
-     * Get the message envelope.
-     */
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Order Success - ' . $this->order->order_id,
+            subject: '❌ Pesanan Gagal Diproses — ' . $this->order->order_id . ' | FEEPAY.ID',
         );
     }
 
-    /**
-     * Get the message content definition.
-     */
     public function content(): Content
     {
         return new Content(
-            view: 'emails.order-success',
+            view: 'emails.order-failed',
         );
     }
 
-    /**
-     * Get the attachments for the message.
-     *
-     * @return array<int, \Illuminate\Mail\Mailables\Attachment>
-     */
     public function attachments(): array
     {
         return [];

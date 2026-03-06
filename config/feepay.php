@@ -4,41 +4,31 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Profit Margin
+    | Profit Margin Default
     |--------------------------------------------------------------------------
-    |
     | Margin keuntungan default yang ditambahkan ke harga modal (dalam IDR).
-    |
+    | Digunakan saat sync produk baru dari Digiflazz.
     */
-
-    'margin' => env('FEEPAY_MARGIN', 1000),
+    'margin' => env('FEEPAY_MARGIN', 2000),
 
     /*
     |--------------------------------------------------------------------------
-    | Admin Security Configuration
+    | Admin Security
     |--------------------------------------------------------------------------
+    | WAJIB diset di .env sebelum deploy ke production:
+    |   ADMIN_PATH_PREFIX=namapath_panjang_yang_tidak_mudah_ditebak
+    |   FEEPAY_ADMIN_PIN=123456
     |
-    | PIN untuk aksi administratif.
-    | Prefix path untuk mengamankan URL Dashboard Admin.
-    |
-    | ⚠️ WAJIB diset di .env:
-    |    FEEPAY_ADMIN_PIN=xxxxxxxx
-    |    ADMIN_PATH_PREFIX=xxxxxxxx
-    |
+    | Jika tidak diset, aplikasi akan throw RuntimeException di production.
     */
-
-    // ✅ FIXED: Hapus fallback 'admin-secret' — wajib diset di .env
-    'admin_path' => env('ADMIN_PATH_PREFIX'),
-
-    // ✅ FIXED: Hapus fallback '123456' — wajib diset di .env
-    'admin_pin'  => env('FEEPAY_ADMIN_PIN'),
+    'admin_path' => env('ADMIN_PATH_PREFIX'),    // Tidak ada fallback — wajib diset
+    'admin_pin'  => env('FEEPAY_ADMIN_PIN'),     // Tidak ada fallback — wajib diset
 
     /*
     |--------------------------------------------------------------------------
     | Support Contact
     |--------------------------------------------------------------------------
     */
-
     'support_whatsapp' => env('SUPPORT_WHATSAPP', '6281234567890'),
     'support_telegram' => env('SUPPORT_TELEGRAM', 'feepay_support'),
     'support_email'    => env('SUPPORT_EMAIL', 'support@feepay.id'),

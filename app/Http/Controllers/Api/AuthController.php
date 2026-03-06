@@ -3,8 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\AdminLoginRequest;
 use App\Models\User;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
@@ -13,179 +13,151 @@ use Illuminate\Support\Facades\Validator;
 class AuthController extends Controller
 {
     /**
-     * Admin login
-     * 
      * POST /api/admin/login
      */
-  public function login(Request $request)
-{
-    $validator = Validator::make($request->all(), [
-        'email' => 'required|email',
-        'password' => 'required|string',
-    ]);
-
-    if ($validator->fails()) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Validation error',
-            'errors' => $validator->errors(),
-        ], 422);
-    }
-
-    try {
-        $user = User::where('email', $request->email)->first();
-
-        if (!$user || !Hash::check($request->password, $user->password)) {
-            // ✅ LOG failed login attempts
-            Log::warning('Failed admin login attempt', [
-                'email' => $request->email,
-                'ip' => $request->ip(),
-                'user_agent' => $request->userAgent(),
-                'timestamp' => now(),
-            ]);
-            
-            return response()->json([
-                'success' => false,
-                'message' => 'Invalid credentials',
-            ], 401);
-        }
-
-        if (!$user->is_active) {
-            Log::warning('Inactive account login attempt', [
-                'email' => $request->email,
-                'ip' => $request->ip(),
-            ]);
-            
-            return response()->json([
-                'success' => false,
-                'message' => 'Account is inactive',
-            ], 403);
-        }
-
-        $token = $user->createToken('admin-token')->plainTextToken;
-
-        // ✅ LOG successful login
-        Log::info('Admin logged in successfully', [
-            'user_id' => $user->id,
-            'email' => $user->email,
-            'ip' => $request->ip(),
+    public function login(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'email'    => 'required|email|max:255',
+            'password' => 'required|string|min:8|max:128',
         ]);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Login successful',
-            'data' => [
-                'token' => $token,
-                'user' => [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'email' => $user->email,
-                    'role' => $user->role,
-                ],
-            ],
-        ], 200);
-
-    } catch (\Exception $e) {
-        Log::error('Login error', [
-            'error' => $e->getMessage(),
-            'email' => $request->email,
-        ]);
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Login failed',
-        ], 500);
-    }
-}
-    /**
-     * Admin logout
-     * 
-     * POST /api/admin/logout
-     */
-    public function logout(Request $request)
-    {
-        try {
-            // Revoke current token
-            $request->user()->currentAccessToken()->delete();
-
-            Log::info('Admin logout', [
-                'user_id' => $request->user()->id,
-                'email' => $request->user()->email,
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Logout successful',
-            ], 200);
-
-        } catch (\Exception $e) {
-            Log::error('Logout error', [
-                'error' => $e->getMessage(),
-            ]);
-
+        if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Logout failed',
-            ], 500);
+                'message' => 'Data tidak valid.',
+                'errors'  => $validator->errors(),
+            ], 422);
         }
-    }
 
-    /**
-     * Get authenticated user info
-     * 
-     * GET /api/admin/me
-     */
-    public function me(Request $request)
-    {
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'id' => $request->user()->id,
-                'name' => $request->user()->name,
-                'email' => $request->user()->email,
-                'role' => $request->user()->role,
-            ],
-        ], 200);
-    }
-
-    /**
-     * Refresh token — revoke old, issue new
-     *
-     * POST /api/admin/refresh
-     */
-    public function refresh(Request $request)
-    {
         try {
-            $user = $request->user();
+            $user = User::where('email', $request->email)->first();
 
-            // Revoke current token
-            $user->currentAccessToken()->delete();
+            // Selalu lakukan Hash::check meskipun user tidak ditemukan
+            // untuk mencegah timing attack (user enumeration)
+            $passwordValid = $user && Hash::check($request->password, $user->password);
 
-            // Issue new token
-            $newToken = $user->createToken('admin-token')->plainTextToken;
+            if (!$user || !$passwordValid) {
+                Log::warning('Login gagal: kredensial salah', [
+                    'email'      => $request->email,
+                    'ip'         => $request->ip(),
+                    'user_agent' => $request->userAgent(),
+                ]);
 
-            Log::info('Admin token refreshed', [
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Email atau password salah.',
+                ], 401);
+            }
+
+            if (!$user->is_active) {
+                Log::warning('Login gagal: akun nonaktif', [
+                    'email' => $request->email,
+                    'ip'    => $request->ip(),
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Akun tidak aktif. Hubungi administrator.',
+                ], 403);
+            }
+
+            // Hapus token lama milik user ini sebelum buat baru (single session)
+            $user->tokens()->delete();
+
+            $token = $user->createToken('admin-token', ['*'], now()->addMinutes(1440))->plainTextToken;
+
+            Log::info('Login berhasil', [
                 'user_id' => $user->id,
+                'email'   => $user->email,
                 'ip'      => $request->ip(),
             ]);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Token refreshed',
+                'message' => 'Login berhasil.',
                 'data'    => [
-                    'token' => $newToken,
+                    'token'      => $token,
+                    'expires_in' => 1440,
+                    'user'       => [
+                        'id'    => $user->id,
+                        'name'  => $user->name,
+                        'email' => $user->email,
+                        'role'  => $user->role,
+                    ],
                 ],
             ], 200);
 
         } catch (\Exception $e) {
-            Log::error('Token refresh error', [
-                'error' => $e->getMessage(),
+            Log::error('Login exception', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Terjadi kesalahan server.'], 500);
+        }
+    }
+
+    /**
+     * POST /api/admin/logout
+     */
+    public function logout(Request $request): JsonResponse
+    {
+        try {
+            $request->user()->currentAccessToken()->delete();
+
+            Log::info('Logout berhasil', [
+                'user_id' => $request->user()->id,
             ]);
 
+            return response()->json(['success' => true, 'message' => 'Logout berhasil.'], 200);
+
+        } catch (\Exception $e) {
+            Log::error('Logout exception', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Logout gagal.'], 500);
+        }
+    }
+
+    /**
+     * GET /api/admin/me
+     */
+    public function me(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'id'    => $user->id,
+                'name'  => $user->name,
+                'email' => $user->email,
+                'role'  => $user->role,
+            ],
+        ], 200);
+    }
+
+    /**
+     * POST /api/admin/refresh
+     * Revoke token lama, terbitkan token baru.
+     */
+    public function refresh(Request $request): JsonResponse
+    {
+        try {
+            $user = $request->user();
+            $user->currentAccessToken()->delete();
+
+            $newToken = $user->createToken('admin-token', ['*'], now()->addMinutes(1440))->plainTextToken;
+
+            Log::info('Token di-refresh', ['user_id' => $user->id, 'ip' => $request->ip()]);
+
             return response()->json([
-                'success' => false,
-                'message' => 'Failed to refresh token',
-            ], 500);
+                'success' => true,
+                'message' => 'Token berhasil diperbarui.',
+                'data'    => [
+                    'token'      => $newToken,
+                    'expires_in' => 1440,
+                ],
+            ], 200);
+
+        } catch (\Exception $e) {
+            Log::error('Token refresh exception', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Gagal memperbarui token.'], 500);
         }
     }
 }

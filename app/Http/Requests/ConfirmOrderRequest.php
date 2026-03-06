@@ -2,8 +2,8 @@
 
 namespace App\Http\Requests;
 
-use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Exceptions\HttpResponseException;
 
 class ConfirmOrderRequest extends FormRequest
@@ -15,18 +15,16 @@ class ConfirmOrderRequest extends FormRequest
 
     public function rules(): array
     {
-        return [
-            // No additional fields required
-            // Order ID comes from route parameter
-        ];
+        // Order ID diambil dari route parameter, tidak ada body yang diperlukan
+        return [];
     }
 
     protected function failedValidation(Validator $validator)
     {
         throw new HttpResponseException(response()->json([
             'success' => false,
-            'message' => 'Validation failed',
-            'errors' => $validator->errors(),
+            'message' => 'Validasi gagal.',
+            'errors'  => $validator->errors(),
         ], 422));
     }
 }

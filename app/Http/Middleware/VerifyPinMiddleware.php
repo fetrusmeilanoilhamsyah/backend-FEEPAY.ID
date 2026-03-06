@@ -10,76 +10,69 @@ use Symfony\Component\HttpFoundation\Response;
 
 class VerifyPinMiddleware
 {
-    /**
-     * Handle an incoming request.
-     */
     public function handle(Request $request, Closure $next): Response
     {
         $key = 'verify-pin:' . $request->ip();
-        
-        // Check rate limit (Max 5 attempts per 15 minutes)
+
+        // Rate limit: max 5 percobaan per 15 menit
         if (RateLimiter::tooManyAttempts($key, 5)) {
             $seconds = RateLimiter::availableIn($key);
-            
-            Log::warning('Too many PIN attempts - IP blocked', [
-                'ip' => $request->ip(),
-                'path' => $request->path(),
+
+            Log::warning('Terlalu banyak percobaan PIN', [
+                'ip'                => $request->ip(),
+                'path'              => $request->path(),
                 'remaining_seconds' => $seconds,
-                'user_agent' => $request->userAgent(),
             ]);
-            
+
             return response()->json([
                 'success' => false,
-                'message' => 'Too many attempts. Please try again in ' . ceil($seconds / 60) . ' minutes.',
+                'message' => 'Terlalu banyak percobaan. Coba lagi dalam ' . ceil($seconds / 60) . ' menit.',
             ], 429);
         }
-        
+
         $pin = $request->header('X-Admin-Pin');
-        
+
         if (!$pin) {
             return response()->json([
                 'success' => false,
-                'message' => 'Admin PIN is required',
+                'message' => 'PIN admin diperlukan.',
             ], 401);
         }
-        
-        // Validate PIN format (6 digits)
+
+        // Validasi format: tepat 6 digit
         if (!preg_match('/^\d{6}$/', $pin)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Invalid PIN format. Must be 6 digits.',
+                'message' => 'Format PIN tidak valid. Harus 6 digit angka.',
             ], 401);
         }
-        
+
         $correctPin = config('feepay.admin_pin');
-        
-        if ($pin !== $correctPin) {
-            // Hit rate limiter (lockout for 15 minutes = 900 seconds)
-            RateLimiter::hit($key, 900);
-            
-            $attempts = RateLimiter::attempts($key);
-            $remaining = 5 - $attempts;
-            
-            Log::warning('Incorrect admin PIN attempt', [
-                'ip' => $request->ip(),
-                'path' => $request->path(),
-                'attempts' => $attempts,
-                'remaining' => max(0, $remaining),
+
+        // hash_equals untuk mencegah timing attack
+        if (!$correctPin || !hash_equals((string) $correctPin, (string) $pin)) {
+            RateLimiter::hit($key, 900); // lockout 15 menit
+
+            $attempts  = RateLimiter::attempts($key);
+            $remaining = max(0, 5 - $attempts);
+
+            Log::warning('PIN admin salah', [
+                'ip'        => $request->ip(),
+                'path'      => $request->path(),
+                'attempts'  => $attempts,
+                'remaining' => $remaining,
             ]);
-            
-            $message = $remaining > 0 
-                ? "Incorrect PIN. {$remaining} attempts remaining."
-                : "Incorrect PIN. Account locked.";
-            
-            return response()->json([
-                'success' => false,
-                'message' => $message,
-            ], 403);
+
+            $message = $remaining > 0
+                ? "PIN salah. {$remaining} percobaan tersisa."
+                : 'PIN salah. Akun terkunci sementara.';
+
+            return response()->json(['success' => false, 'message' => $message], 403);
         }
-        
-        // Clear rate limit on successful PIN
+
+        // Berhasil — reset rate limiter
         RateLimiter::clear($key);
-        
+
         return $next($request);
     }
 }

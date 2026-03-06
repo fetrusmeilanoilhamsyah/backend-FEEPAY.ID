@@ -2,43 +2,41 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\OrderStatus;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\Product;
-use App\Enums\OrderStatus;
+use App\Services\DigiflazzService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class DashboardController extends Controller
 {
+    public function __construct(
+        protected DigiflazzService $digiflazzService
+    ) {}
+
     /**
-     * Get dashboard statistics (Admin only)
+     * GET /api/admin/{path}/dashboard/stats
      */
-    public function stats(Request $request)
+    public function stats(Request $request): JsonResponse
     {
         try {
-            // Filter rentang tanggal
-            $startDate = $request->input('start_date', now()->startOfMonth());
-            $endDate = $request->input('end_date', now());
+            $startDate = $request->input('start_date', now()->startOfMonth()->toDateTimeString());
+            $endDate   = $request->input('end_date', now()->toDateTimeString());
 
-            // Statistik Pesanan
-            $totalOrders = Order::whereBetween('created_at', [$startDate, $endDate])->count();
+            $totalOrders   = Order::whereBetween('created_at', [$startDate, $endDate])->count();
             $pendingOrders = Order::pending()->count();
             $successOrders = Order::success()->whereBetween('created_at', [$startDate, $endDate])->count();
-            $failedOrders = Order::failed()->whereBetween('created_at', [$startDate, $endDate])->count();
-
-            // Pendapatan dari pesanan sukses
-            $totalRevenue = Order::success()
+            $failedOrders  = Order::failed()->whereBetween('created_at', [$startDate, $endDate])->count();
+            $totalRevenue  = Order::success()
                 ->whereBetween('created_at', [$startDate, $endDate])
                 ->sum('total_price');
 
-            // Aktivitas Terbaru
-            $recentOrders = Order::orderBy('created_at', 'desc')
-                ->limit(10)
-                ->get();
+            $recentOrders = Order::orderBy('created_at', 'desc')->limit(10)->get();
 
-            // Grafik pendapatan harian (7 hari terakhir)
             $dailyRevenue = Order::success()
                 ->where('created_at', '>=', now()->subDays(7))
                 ->select(
@@ -52,7 +50,7 @@ class DashboardController extends Controller
 
             return response()->json([
                 'success' => true,
-                'data' => [
+                'data'    => [
                     'overview' => [
                         'total_orders'   => $totalOrders,
                         'pending_orders' => $pendingOrders,
@@ -71,19 +69,18 @@ class DashboardController extends Controller
             ], 200);
 
         } catch (\Exception $e) {
-            Log::error('Dashboard Stats Error: ' . $e->getMessage());
-            return response()->json(['success' => false, 'message' => 'Gagal mengambil statistik'], 500);
+            Log::error('DashboardController::stats gagal', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Gagal mengambil statistik.'], 500);
         }
     }
 
     /**
-     * Get Digiflazz account balance
+     * GET /api/admin/{path}/dashboard/balance
      */
-    public function getBalance()
+    public function getBalance(): JsonResponse
     {
         try {
-            $digiflazzService = app(\App\Services\DigiflazzService::class);
-            $result = $digiflazzService->getBalance(); // ✅ FIXED: checkBalance() → getBalance()
+            $result = $this->digiflazzService->getBalance();
 
             if (!$result['success']) {
                 return response()->json([
@@ -105,8 +102,26 @@ class DashboardController extends Controller
             ], 200);
 
         } catch (\Exception $e) {
-            Log::error('Digiflazz Balance Error: ' . $e->getMessage());
-            return response()->json(['success' => false, 'message' => 'Gagal cek saldo'], 500);
+            Log::error('DashboardController::getBalance gagal', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Gagal cek saldo.'], 500);
+        }
+    }
+
+    /**
+     * GET /api/admin/{path}/dashboard/products
+     */
+    public function productStats(): JsonResponse
+    {
+        try {
+            $stats = Product::select('category', DB::raw('COUNT(*) as total'), DB::raw('SUM(CASE WHEN status = "active" THEN 1 ELSE 0 END) as active'))
+                ->groupBy('category')
+                ->get();
+
+            return response()->json(['success' => true, 'data' => $stats], 200);
+
+        } catch (\Exception $e) {
+            Log::error('DashboardController::productStats gagal', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Gagal mengambil statistik produk.'], 500);
         }
     }
 }

@@ -15,7 +15,7 @@ return [
 
     'allowed_origins_patterns' => [],
 
-    // ✅ FIXED: '*' → header spesifik yang dipakai FEEPAY.ID
+    // Hanya header yang benar-benar dipakai — tidak pakai wildcard '*'
     'allowed_headers' => [
         'Content-Type',
         'Authorization',
@@ -27,7 +27,7 @@ return [
 
     'exposed_headers' => [],
 
-    'max_age' => 86400, // cache preflight 24 jam
+    'max_age' => 86400, // Preflight di-cache 24 jam
 
     'supports_credentials' => true,
 ];

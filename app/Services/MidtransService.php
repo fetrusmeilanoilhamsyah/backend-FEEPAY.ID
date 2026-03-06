@@ -5,29 +5,23 @@ namespace App\Services;
 use Midtrans\Config;
 use Midtrans\Snap;
 use Midtrans\Notification;
-use Exception;
 use Illuminate\Support\Facades\Log;
+use Exception;
 
 class MidtransService
 {
     public function __construct()
     {
-        // Set konfigurasi Midtrans
-        Config::$serverKey = config('services.midtrans.server_key');
+        Config::$serverKey    = config('services.midtrans.server_key');
         Config::$isProduction = config('services.midtrans.is_production');
-        Config::$isSanitized = config('services.midtrans.is_sanitized');
-        Config::$is3ds = config('services.midtrans.is_3ds');
+        Config::$isSanitized  = true;
+        Config::$is3ds        = true;
     }
 
     /**
-     * Create Snap Token untuk pembayaran
-     * SECURITY: Amount diambil dari database, bukan dari user input
+     * Buat Snap Token untuk pembayaran.
+     * SECURITY: amount diambil dari database, bukan dari user input.
      *
-     * @param string $orderId
-     * @param int $amount - Harga dari database (dalam Rupiah)
-     * @param string $customerEmail
-     * @param string $productName
-     * @return string Snap Token
      * @throws Exception
      */
     public function createSnapToken(
@@ -36,146 +30,93 @@ class MidtransService
         string $customerEmail,
         string $productName
     ): string {
-        try {
-            // Validasi amount harus positif
-            if ($amount <= 0) {
-                throw new Exception("Invalid amount: must be greater than 0");
-            }
+        if ($amount <= 0) {
+            throw new Exception("Amount tidak valid: harus lebih dari 0.");
+        }
 
-            // Parameter untuk Midtrans Snap
+        try {
             $params = [
                 'transaction_details' => [
-                    'order_id' => $orderId,
-                    'gross_amount' => $amount, // Amount dari database
+                    'order_id'     => $orderId,
+                    'gross_amount' => $amount,
                 ],
-                'item_details' => [
-                    [
-                        'id' => $orderId,
-                        'price' => $amount,
-                        'quantity' => 1,
-                        'name' => $productName,
-                    ]
-                ],
+                'item_details' => [[
+                    'id'       => $orderId,
+                    'price'    => $amount,
+                    'quantity' => 1,
+                    'name'     => substr($productName, 0, 50), // Midtrans max 50 char
+                ]],
                 'customer_details' => [
                     'email' => $customerEmail,
                 ],
-                // ✅ Tidak perlu filter — Midtrans otomatis tampilkan semua
-                // payment method yang sudah aktif di dashboard production
                 'callbacks' => [
                     'finish' => config('app.url') . '/payment/finish',
                 ],
                 'expiry' => [
                     'start_time' => date('Y-m-d H:i:s O'),
-                    'unit' => 'minutes',
-                    'duration' => 60, // 1 jam
+                    'unit'       => 'minutes',
+                    'duration'   => 60, // 1 jam
                 ],
             ];
 
-            // Generate Snap Token
             $snapToken = Snap::getSnapToken($params);
 
-            Log::info('Snap token created', [
+            Log::info('MidtransService: snap token dibuat', [
                 'order_id' => $orderId,
-                'amount' => $amount,
+                'amount'   => $amount,
             ]);
 
             return $snapToken;
 
         } catch (Exception $e) {
-            Log::error('Failed to create snap token', [
+            Log::error('MidtransService: gagal buat snap token', [
                 'order_id' => $orderId,
-                'error' => $e->getMessage(),
+                'error'    => $e->getMessage(),
             ]);
-            throw new Exception('Failed to create payment token: ' . $e->getMessage());
+            throw new Exception('Gagal membuat token pembayaran: ' . $e->getMessage());
         }
     }
 
     /**
-     * Verify Signature Key dari Midtrans Notification
-     * SECURITY: Mencegah webhook palsu dengan validasi signature
-     *
-     * @param array $notificationData
-     * @return bool
+     * Verifikasi signature dari notifikasi Midtrans.
+     * Menggunakan hash_equals() untuk mencegah timing attack.
      */
     public function verifySignature(array $notificationData): bool
     {
         try {
-            $orderId = $notificationData['order_id'] ?? null;
-            $statusCode = $notificationData['status_code'] ?? null;
-            $grossAmount = $notificationData['gross_amount'] ?? null;
-            $serverKey = config('services.midtrans.server_key');
-            $receivedSignature = $notificationData['signature_key'] ?? null;
+            $orderId           = $notificationData['order_id']       ?? null;
+            $statusCode        = $notificationData['status_code']    ?? null;
+            $grossAmount       = $notificationData['gross_amount']   ?? null;
+            $receivedSignature = $notificationData['signature_key']  ?? null;
+            $serverKey         = config('services.midtrans.server_key');
 
             if (!$orderId || !$statusCode || !$grossAmount || !$receivedSignature) {
-                Log::warning('Missing required fields for signature verification', [
-                    'notification_data' => $notificationData,
-                ]);
+                Log::warning('MidtransService: field signature tidak lengkap', $notificationData);
                 return false;
             }
 
-            // Generate expected signature
             $expectedSignature = hash('sha512', $orderId . $statusCode . $grossAmount . $serverKey);
-
-            // Compare signatures
-            $isValid = hash_equals($expectedSignature, $receivedSignature);
+            $isValid           = hash_equals($expectedSignature, $receivedSignature);
 
             if (!$isValid) {
-                Log::warning('Invalid signature detected', [
+                Log::warning('MidtransService: signature tidak valid', [
                     'order_id' => $orderId,
-                    'expected' => $expectedSignature,
-                    'received' => $receivedSignature,
                 ]);
             }
 
             return $isValid;
 
         } catch (Exception $e) {
-            Log::error('Signature verification failed', [
-                'error' => $e->getMessage(),
-            ]);
+            Log::error('MidtransService: verifySignature exception', ['error' => $e->getMessage()]);
             return false;
         }
     }
 
     /**
-     * Get notification data dari Midtrans
-     *
-     * @return Notification
+     * Ambil objek Notification dari Midtrans.
      */
     public function getNotification(): Notification
     {
         return new Notification();
-    }
-
-    /**
-     * Map Midtrans transaction status ke internal order status
-     *
-     * @param string $transactionStatus
-     * @param string $fraudStatus
-     * @return string
-     */
-    public function mapTransactionStatus(string $transactionStatus, string $fraudStatus = 'accept'): string
-    {
-        // Status Midtrans: capture, settlement, pending, deny, expire, cancel
-        if ($transactionStatus == 'capture') {
-            if ($fraudStatus == 'accept') {
-                return 'processing'; // Payment captured & verified
-            }
-            return 'pending'; // Fraud detection pending
-        }
-
-        if ($transactionStatus == 'settlement') {
-            return 'processing'; // Payment sukses, siap diproses ke Digiflazz
-        }
-
-        if ($transactionStatus == 'pending') {
-            return 'pending'; // Waiting for payment
-        }
-
-        if (in_array($transactionStatus, ['deny', 'expire', 'cancel'])) {
-            return 'failed'; // Payment failed
-        }
-
-        return 'pending'; // Default
     }
 }

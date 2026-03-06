@@ -13,16 +13,16 @@ class Product extends Model
         'sku',
         'name',
         'category',
-        'brand',         // Kolom Baru
+        'brand',
         'cost_price',
         'selling_price',
-        'status',        // Menggantikan is_active agar sinkron dengan Controller
-        'stock',         // Kolom Baru
-        'type'           // Kolom Baru untuk filter UI Game
+        'status',
+        'stock',
+        'type',
     ];
 
     protected $casts = [
-        'cost_price' => 'decimal:2',
+        'cost_price'    => 'decimal:2',
         'selling_price' => 'decimal:2',
     ];
 
@@ -33,9 +33,6 @@ class Product extends Model
         return (float) ($this->selling_price - $this->cost_price);
     }
 
-    /**
-     * Scope untuk mempermudah filter di Controller
-     */
     public function scopeActive($query)
     {
         return $query->where('status', 'active');

@@ -2,259 +2,199 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Http\Controllers\Controller;
-use App\Models\Order;
-use App\Models\Product;
 use App\Enums\OrderStatus;
+use App\Http\Controllers\Controller;
 use App\Jobs\SendOrderSuccessEmail;
 use App\Mail\OrderFailed;
-use App\Services\TelegramService; // Baris Baru: Untuk Notif Tele
+use App\Models\Order;
+use App\Models\Product;
+use App\Services\TelegramService;
+use Exception;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
-use Exception;
 
 class CallbackController extends Controller
 {
     /**
-     * Handle Digiflazz Callback
      * POST /api/callback/digiflazz
+     * Endpoint ini dipanggil oleh server Digiflazz, bukan oleh user.
      */
-    public function digiflazz(Request $request)
+    public function digiflazz(Request $request): JsonResponse
     {
+        Log::info('Digiflazz callback diterima', $request->all());
+
         try {
-            Log::info("Digiflazz callback received", $request->all());
-
-            // ============================================
-            // STEP 1: VERIFIKASI SIGNATURE
-            // ============================================
-            $username     = config("services.digiflazz.username");
-            $apiKey       = config("services.digiflazz.api_key");
-            $refId        = $request->input("data.ref_id");
+            // ── Langkah 1: Verifikasi signature ──────────────────────────────
+            $username     = config('services.digiflazz.username');
+            $apiKey       = config('services.digiflazz.api_key');
+            $refId        = $request->input('data.ref_id');
             $expectedSign = md5($username . $apiKey . $refId);
-            $receivedSign = $request->input("sign");
+            $receivedSign = $request->input('sign');
 
-            if ($expectedSign !== $receivedSign) {
-                Log::warning("Invalid Digiflazz callback signature", [
-                    "expected" => $expectedSign,
-                    "received" => $receivedSign,
-                    "ref_id"   => $refId,
-                    "ip"       => $request->ip(),
+            if (!hash_equals($expectedSign, $receivedSign)) {
+                Log::warning('Digiflazz callback: signature tidak valid', [
+                    'ref_id' => $refId,
+                    'ip'     => $request->ip(),
                 ]);
-                return response()->json(['success' => false, 'message' => 'Invalid signature'], 401);
+                return response()->json(['success' => false, 'message' => 'Signature tidak valid.'], 401);
             }
 
-            // ============================================
-            // STEP 2: CARI ORDER
-            // ============================================
-            $order = Order::where("order_id", $refId)->first();
+            // ── Langkah 2: Cari order ─────────────────────────────────────────
+            $order = Order::where('order_id', $refId)->first();
 
             if (!$order) {
-                Log::warning("Order not found in Digiflazz callback", ["ref_id" => $refId]);
-                return response()->json(['success' => false, 'message' => 'Order not found'], 404);
+                Log::warning('Digiflazz callback: order tidak ditemukan', ['ref_id' => $refId]);
+                return response()->json(['success' => false, 'message' => 'Order tidak ditemukan.'], 404);
             }
 
-            // ============================================
-            // STEP 3: AMBIL DATA CALLBACK
-            // ============================================
-            $status  = $request->input("data.status");
-            $sn      = $request->input("data.sn");
-            $message = $request->input("data.message");
+            // Jika status sudah final, abaikan callback duplikat
+            if ($order->status->isFinal()) {
+                Log::info('Digiflazz callback: status sudah final, diabaikan', [
+                    'order_id' => $order->order_id,
+                    'status'   => $order->status->value,
+                ]);
+                return response()->json(['success' => true, 'message' => 'Status sudah final.'], 200);
+            }
 
-            // ============================================
-            // STEP 4: HANDLE STATUS SUKSES
-            // ============================================
-            if ($status === "Sukses") {
+            // ── Langkah 3: Proses status ──────────────────────────────────────
+            $status  = $request->input('data.status');
+            $sn      = $request->input('data.sn');
+            $message = $request->input('data.message');
+
+            DB::beginTransaction();
+
+            if ($status === 'Sukses') {
                 $order->update([
-                    "status" => OrderStatus::SUCCESS->value,
-                    "sn"     => $sn,
+                    'status' => OrderStatus::SUCCESS->value,
+                    'sn'     => $sn,
                 ]);
+                $order->logStatusChange(OrderStatus::SUCCESS, 'Sukses via callback Digiflazz. SN: ' . $sn);
 
-                $order->logStatusChange(
-                    OrderStatus::SUCCESS,
-                    "Order completed via Digiflazz callback. SN: " . $sn
-                );
+                DB::commit();
 
-                Log::info("Order marked as success via Digiflazz callback", [
-                    "order_id" => $order->order_id,
-                    "sn"       => $sn,
-                ]);
-
-                // Kirim Notifikasi ke Telegram Admin
-                $this->sendTelegramNotification($order, 'SUKSES', $sn);
-
-                // ✅ FIX B2: Dispatch ke queue
+                Log::info('Order sukses via callback', ['order_id' => $order->order_id, 'sn' => $sn]);
+                $this->notifyTelegram($order, 'SUKSES', $sn);
                 $this->dispatchSuccessEmail($order);
 
-            // ============================================
-            // STEP 5: HANDLE STATUS GAGAL
-            // ============================================
-            } elseif ($status === "Gagal") {
-                $order->update(["status" => OrderStatus::FAILED->value]);
+            } elseif ($status === 'Gagal') {
+                $order->update(['status' => OrderStatus::FAILED->value]);
+                $order->logStatusChange(OrderStatus::FAILED, 'Gagal via callback Digiflazz. Alasan: ' . $message);
 
-                $order->logStatusChange(
-                    OrderStatus::FAILED,
-                    "Order failed via Digiflazz callback. Reason: " . $message
-                );
+                DB::commit();
 
-                Log::warning("Order marked as failed via Digiflazz callback", [
-                    "order_id" => $order->order_id,
-                    "message"  => $message,
+                Log::warning('Order gagal via callback', [
+                    'order_id' => $order->order_id,
+                    'message'  => $message,
                 ]);
-
-                // Kirim Notifikasi ke Telegram Admin
-                $this->sendTelegramNotification($order, 'GAGAL', null, $message);
-
-                // Email gagal tetap sync
+                $this->notifyTelegram($order, 'GAGAL', null, $message);
                 $this->sendFailedEmail($order, $message);
 
-            // ============================================
-            // STEP 6: HANDLE STATUS PENDING
-            // ============================================
             } else {
-                Log::info("Digiflazz callback with non-final status", [
-                    "order_id" => $order->order_id,
-                    "status"   => $status,
-                    "message"  => $message,
+                DB::rollBack();
+                Log::info('Digiflazz callback: status non-final', [
+                    'order_id' => $order->order_id,
+                    'status'   => $status,
                 ]);
             }
 
-            return response()->json(['success' => true, 'message' => 'Callback processed'], 200);
+            // Selalu balas 200 ke Digiflazz agar tidak retry terus
+            return response()->json(['success' => true, 'message' => 'Callback diproses.'], 200);
 
         } catch (Exception $e) {
-            Log::error("Digiflazz callback processing failed", [
-                "error"   => $e->getMessage(),
-                "trace"   => $e->getTraceAsString(),
-                "payload" => $request->all(),
+            DB::rollBack();
+            Log::error('Digiflazz callback exception', [
+                'error'   => $e->getMessage(),
+                'payload' => $request->all(),
             ]);
 
-            return response()->json(['success' => false, 'message' => 'Callback processing failed'], 200);
+            // Tetap 200 agar Digiflazz tidak spam retry
+            return response()->json(['success' => false, 'message' => 'Callback gagal diproses.'], 200);
         }
     }
 
-    /**
-     * BARIS BARU: Fungsi untuk kirim notifikasi Telegram
-     */
-    private function sendTelegramNotification(Order $order, string $status, ?string $sn = null, ?string $reason = null): void
+    // ─── Private Helpers ──────────────────────────────────────────────────────
+
+    private function notifyTelegram(Order $order, string $status, ?string $sn = null, ?string $reason = null): void
     {
-        $emoji = ($status === 'SUKSES') ? '✅' : '❌';
+        $emoji   = $status === 'SUKSES' ? '✅' : '❌';
         $nominal = number_format($order->total_price, 0, ',', '.');
-        
-        $pesan = "
-*NOTIFIKASI TRANSAKSI FEEPAY* $emoji
-----------------------------------
-*Status:* $status
-*Produk:* {$order->product_name}
-*Nominal:* Rp $nominal
-*Pembeli:* {$order->customer_email}
-*Order ID:* #{$order->order_id}";
+
+        $pesan = "*NOTIFIKASI TRANSAKSI FEEPAY* {$emoji}\n" .
+                 "----------------------------------\n" .
+                 "*Status:* {$status}\n" .
+                 "*Produk:* {$order->product_name}\n" .
+                 "*Nominal:* Rp {$nominal}\n" .
+                 "*Pembeli:* {$order->customer_email}\n" .
+                 "*Order ID:* #{$order->order_id}";
 
         if ($sn) {
             $pesan .= "\n*SN:* `{$sn}`";
         }
-        
         if ($reason) {
-            $pesan .= "\n*Alasan:* $reason";
+            $pesan .= "\n*Alasan:* {$reason}";
         }
 
-        $pesan .= "
-----------------------------------
-_Laporan otomatis sistem FEEPAY.ID_";
+        $pesan .= "\n----------------------------------\n_Laporan otomatis sistem FEEPAY.ID_";
 
         TelegramService::notify($pesan);
     }
 
-    /**
-     * Dispatch email sukses ke queue
-     */
     private function dispatchSuccessEmail(Order $order): void
     {
         try {
-            $product = Product::where("sku", $order->sku)->first();
-
-            if (!$product) {
-                Log::warning("Product not found for email, using order data", [
-                    "order_id" => $order->order_id,
-                    "sku"      => $order->sku,
+            $product = Product::where('sku', $order->sku)->first()
+                ?? new Product([
+                    'name'          => $order->product_name,
+                    'sku'           => $order->sku,
+                    'selling_price' => $order->total_price,
                 ]);
-                $product = new \App\Models\Product([
-                    "name"          => $order->product_name,
-                    "sku"           => $order->sku,
-                    "selling_price" => $order->total_price,
-                ]);
-            }
 
             SendOrderSuccessEmail::dispatch($order, $product);
 
-            Log::info("Success email dispatched to queue", [
-                "order_id" => $order->order_id,
-                "email"    => $order->customer_email,
-            ]);
+            Log::info('Email sukses di-dispatch ke queue', ['order_id' => $order->order_id]);
 
         } catch (Exception $e) {
-            Log::error("Failed to dispatch success email to queue, falling back to sync", [
-                "order_id" => $order->order_id,
-                "error"    => $e->getMessage(),
+            Log::error('Gagal dispatch email sukses', [
+                'order_id' => $order->order_id,
+                'error'    => $e->getMessage(),
             ]);
-
-            try {
-                $product = $product ?? new \App\Models\Product([
-                    "name"          => $order->product_name,
-                    "sku"           => $order->sku,
-                    "selling_price" => $order->total_price,
-                ]);
-                Mail::to($order->customer_email)
-                    ->send(new \App\Mail\OrderSuccess($order, $product));
-            } catch (Exception $mailEx) {
-                Log::error("Sync fallback email also failed", [
-                    "order_id" => $order->order_id,
-                    "error"    => $mailEx->getMessage(),
-                ]);
-            }
         }
     }
 
-    /**
-     * Send Failed Email
-     */
     private function sendFailedEmail(Order $order, ?string $rawReason = null): void
     {
         try {
-            $userFriendlyReason = $this->translateFailedReason($rawReason);
-            Mail::to($order->customer_email)
-                ->send(new OrderFailed($order, $userFriendlyReason));
+            Mail::to($order->customer_email)->send(new OrderFailed($order, $this->translateReason($rawReason)));
 
-            Log::info("Failed email sent to customer", [
-                "order_id" => $order->order_id,
-                "email"    => $order->customer_email,
-            ]);
-        } catch (Exception $mailException) {
-            Log::error("Failed to send failed email", [
-                "order_id" => $order->order_id,
-                "error"    => $mailException->getMessage(),
+            Log::info('Email gagal terkirim', ['order_id' => $order->order_id]);
+
+        } catch (Exception $e) {
+            Log::error('Gagal kirim email order gagal', [
+                'order_id' => $order->order_id,
+                'error'    => $e->getMessage(),
             ]);
         }
     }
 
-    /**
-     * Translate Failed Reason
-     */
-    private function translateFailedReason(?string $reason): string
+    private function translateReason(?string $reason): string
     {
         if (!$reason) return 'Terjadi kesalahan saat memproses pesanan Anda.';
 
-        $reason = strtolower($reason);
+        $r = strtolower($reason);
 
-        if (str_contains($reason, 'saldo') || str_contains($reason, 'balance') || str_contains($reason, 'insufficient')) {
-            return 'Layanan sedang tidak tersedia untuk sementara. Silakan coba lagi nanti atau hubungi Customer Service.';
+        if (str_contains($r, 'saldo') || str_contains($r, 'balance') || str_contains($r, 'insufficient')) {
+            return 'Layanan sedang tidak tersedia sementara. Silakan coba lagi nanti atau hubungi Customer Service.';
         }
-        if (str_contains($reason, 'nomor') || str_contains($reason, 'number') || str_contains($reason, 'destination')) {
+        if (str_contains($r, 'nomor') || str_contains($r, 'number') || str_contains($r, 'destination')) {
             return 'Nomor tujuan tidak valid. Pastikan nomor yang Anda masukkan sudah benar.';
         }
-        if (str_contains($reason, 'sku') || str_contains($reason, 'produk') || str_contains($reason, 'product')) {
+        if (str_contains($r, 'sku') || str_contains($r, 'produk') || str_contains($r, 'product')) {
             return 'Produk yang Anda pesan sedang tidak tersedia. Silakan pilih produk lain.';
         }
-        if (str_contains($reason, 'timeout') || str_contains($reason, 'server') || str_contains($reason, 'connection')) {
+        if (str_contains($r, 'timeout') || str_contains($r, 'server') || str_contains($r, 'connection')) {
             return 'Koneksi ke server provider terputus. Silakan coba lagi dalam beberapa menit.';
         }
 
