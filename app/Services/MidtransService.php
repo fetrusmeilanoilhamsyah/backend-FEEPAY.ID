@@ -59,17 +59,8 @@ class MidtransService
                 'customer_details' => [
                     'email' => $customerEmail,
                 ],
-                'enabled_payments' => [
-                    'credit_card',
-                    'bca_va',
-                    'bni_va',
-                    'bri_va',
-                    'permata_va',
-                    'other_va',
-                    'gopay',
-                    'shopeepay',
-                    'qris',
-                ],
+                // ✅ Tidak perlu filter — Midtrans otomatis tampilkan semua
+                // payment method yang sudah aktif di dashboard production
                 'callbacks' => [
                     'finish' => config('app.url') . '/payment/finish',
                 ],
