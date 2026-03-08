@@ -26,15 +26,9 @@ class OrderController extends Controller
         protected DigiflazzService $digiflazzService
     ) {}
 
-    // ─── Public: Buat Order Baru ──────────────────────────────────────────────
-
-    /**
-     * POST /api/orders/create
-     */
     public function store(StoreOrderRequest $request): JsonResponse
     {
         try {
-            // Idempotency: cegah order duplikat dari klik ganda
             $idempotencyKey = $request->header('X-Idempotency-Key');
             if ($idempotencyKey) {
                 $cacheKey = 'idempotency:order:' . hash('sha256', $idempotencyKey);
@@ -50,7 +44,6 @@ class OrderController extends Controller
 
             DB::beginTransaction();
 
-            // Ambil produk — harga dari database, bukan dari request
             $product = Product::where('sku', $request->sku)->where('status', 'active')->first();
             if (!$product) {
                 DB::rollBack();
@@ -66,7 +59,7 @@ class OrderController extends Controller
                 'target_number'  => $request->target_number,
                 'zone_id'        => $request->zone_id,
                 'customer_email' => strtolower($request->customer_email),
-                'total_price'    => $product->selling_price, // Harga dari DB, bukan dari user
+                'total_price'    => $product->selling_price,
                 'status'         => OrderStatus::PENDING->value,
             ]);
 
@@ -74,7 +67,6 @@ class OrderController extends Controller
 
             DB::commit();
 
-            // Simpan ke idempotency cache — hanya data minimal, bukan data sensitif
             if ($idempotencyKey) {
                 $cachePayload = [
                     'order_id'     => $order->order_id,
@@ -101,17 +93,11 @@ class OrderController extends Controller
         }
     }
 
-    // ─── Admin: Konfirmasi & Kirim ke Digiflazz ───────────────────────────────
-
-    /**
-     * POST /api/admin/{path}/orders/{id}/confirm
-     */
     public function confirm(ConfirmOrderRequest $request, int $id): JsonResponse
     {
         try {
             DB::beginTransaction();
 
-            // lockForUpdate mencegah dua request admin mengonfirmasi order yang sama serentak
             $order = Order::lockForUpdate()->find($id);
 
             if (!$order) {
@@ -124,7 +110,6 @@ class OrderController extends Controller
                 return response()->json(['success' => false, 'message' => 'Pesanan sudah diproses sebelumnya.'], 400);
             }
 
-            // Gabungkan target + zone_id jika ada
             $target = $order->target_number;
             if ($order->zone_id) {
                 $target = $order->target_number . $order->zone_id;
@@ -191,23 +176,18 @@ class OrderController extends Controller
         }
     }
 
-    // ─── Admin: Sinkronisasi Status dari Digiflazz ────────────────────────────
-
-    /**
-     * POST /api/admin/{path}/orders/{orderId}/sync
-     * Fix BUG-13: method sebelumnya bernama syncStatus dengan signature berbeda.
-     * Sekarang menggunakan orderId sebagai string dari route parameter.
-     */
     public function sync(Request $request, string $orderId): JsonResponse
     {
         try {
-            $order = Order::where('order_id', $orderId)->first();
+            // ✅ PERBAIKAN: Tambah lockForUpdate untuk prevent concurrent sync
+            $order = DB::transaction(function () use ($orderId) {
+                return Order::where('order_id', $orderId)->lockForUpdate()->first();
+            });
 
             if (!$order) {
                 return response()->json(['success' => false, 'message' => 'Pesanan tidak ditemukan.'], 404);
             }
 
-            // Tidak perlu sync jika sudah final
             if ($order->status->isFinal()) {
                 return response()->json([
                     'success' => true,
@@ -256,7 +236,11 @@ class OrderController extends Controller
 
                 if ($newStatus === OrderStatus::SUCCESS) {
                     try {
-                        Mail::to($order->customer_email)->send(new OrderSuccess($order));
+                        // ✅ PERBAIKAN: Dispatch ke queue instead of sync send
+                        \App\Jobs\SendOrderSuccessEmail::dispatch(
+                            $order, 
+                            Product::where('sku', $order->sku)->first()
+                        );
                     } catch (Exception $mailEx) {
                         Log::error('Email sukses gagal dikirim setelah sync', [
                             'order_id' => $order->order_id,
@@ -278,34 +262,43 @@ class OrderController extends Controller
         }
     }
 
-    // ─── Admin: Daftar Semua Order ────────────────────────────────────────────
-
-    /**
-     * GET /api/admin/{path}/orders
-     */
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
+        // ✅ PERBAIKAN: Tambah filtering dan optimize eager loading
+        $query = Order::query();
+        
+        if ($status = $request->query('status')) {
+            $query->where('status', $status);
+        }
+        
+        if ($startDate = $request->query('start_date')) {
+            $query->where('created_at', '>=', $startDate);
+        }
+        
+        if ($endDate = $request->query('end_date')) {
+            $query->where('created_at', '<=', $endDate);
+        }
+        
+        $orders = $query->with([
+            'statusHistories' => function ($q) {
+                $q->latest()->limit(5);
+            }
+        ])
+        ->orderBy('created_at', 'desc')
+        ->paginate($request->query('per_page', 50));
+
         return response()->json([
             'success' => true,
-            'data'    => Order::with('statusHistories')
-                ->orderBy('created_at', 'desc')
-                ->paginate(50),
+            'data'    => $orders,
         ]);
     }
 
-    // ─── Public: Cek Status Order oleh Pelanggan ─────────────────────────────
-
-    /**
-     * POST /api/orders/{orderId}
-     * Email diperlukan untuk membuktikan kepemilikan order.
-     */
     public function show(Request $request, string $orderId): JsonResponse
     {
         $request->validate(['email' => 'required|email']);
 
         $order = Order::where('order_id', $orderId)->first();
 
-        // Bandingkan email secara case-insensitive
         if (!$order || strtolower($request->email) !== strtolower($order->customer_email)) {
             return response()->json(['success' => false, 'message' => 'Pesanan tidak ditemukan.'], 404);
         }

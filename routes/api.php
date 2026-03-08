@@ -10,11 +10,6 @@ use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\SupportController;
 use App\Models\Order;
 
-/*
-|--------------------------------------------------------------------------
-| Health Check
-|--------------------------------------------------------------------------
-*/
 Route::get('/health', function () {
     return response()->json([
         'success'   => true,
@@ -24,44 +19,31 @@ Route::get('/health', function () {
     ]);
 });
 
-/*
-|--------------------------------------------------------------------------
-| Public Routes — dengan Rate Limiting
-|--------------------------------------------------------------------------
-*/
-
-// Admin Login: sangat ketat (5 per menit)
+// ✅ PERBAIKAN: Admin Login - sangat ketat
 Route::middleware('throttle:5,1')->group(function () {
     Route::post('/admin/login', [AuthController::class, 'login']);
 });
 
-// Support: 5 per menit
 Route::middleware('throttle:5,1')->group(function () {
     Route::post('/support/send', [SupportController::class, 'send']);
     Route::get('/support/contacts', [SupportController::class, 'getContacts']);
 });
 
-// Order & Pembayaran: 20 per menit
-Route::middleware('throttle:20,1')->group(function () {
+// ✅ PERBAIKAN: Order & Pembayaran dengan rate limit per-email
+Route::middleware('throttle:order-creation')->group(function () {
     Route::post('/orders/create', [OrderController::class, 'store']);
     Route::post('/payments/midtrans/create', [MidtransPaymentController::class, 'createPayment']);
 });
 
-// Webhook provider: permissif (100 per menit) — Digiflazz & Midtrans harus bisa masuk
 Route::middleware('throttle:100,1')->group(function () {
     Route::post('/callback/digiflazz', [CallbackController::class, 'digiflazz']);
     Route::post('/midtrans/webhook', [MidtransPaymentController::class, 'handleNotification']);
 });
 
-// Read-only publik: 60 per menit
 Route::middleware('throttle:60,1')->group(function () {
     Route::get('/products', [ProductController::class, 'index']);
-
-    // POST dipakai karena email pelanggan dikirim sebagai body untuk verifikasi kepemilikan
     Route::post('/orders/{orderId}', [OrderController::class, 'show']);
 
-    // Polling status pembayaran dari checkout.blade.php — cek apakah sudah dibayar
-    // Dipakai oleh halaman /payment/checkout/{orderId} setiap 5 detik
     Route::get('/payment/status/{orderId}', function (string $orderId) {
         $order = Order::where('order_id', $orderId)->first();
 
@@ -79,22 +61,11 @@ Route::middleware('throttle:60,1')->group(function () {
     });
 });
 
-/*
-|--------------------------------------------------------------------------
-| Admin Auth Routes (token saja, tanpa PIN)
-|--------------------------------------------------------------------------
-*/
 Route::prefix('admin')->middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/refresh', [AuthController::class, 'refresh']);
 });
-
-/*
-|--------------------------------------------------------------------------
-| Protected Admin Routes (token + PIN + rate limit admin)
-|--------------------------------------------------------------------------
-*/
 
 $adminPath = config('feepay.admin_path');
 
@@ -107,25 +78,23 @@ if (empty($adminPath)) {
     $adminPath = 'dev-admin-path-change-me';
 }
 
+// ✅ PERBAIKAN: Gunakan throttle custom untuk admin
 Route::prefix("admin/{$adminPath}")
-    ->middleware(['auth:sanctum', 'admin.ip', 'verify.pin', 'throttle:60,1'])
+    ->middleware(['auth:sanctum', 'admin.ip', 'verify.pin', 'throttle:admin-ops'])
     ->group(function () {
 
-        // Dashboard
         Route::prefix('dashboard')->group(function () {
             Route::get('/stats', [DashboardController::class, 'stats']);
             Route::get('/products', [DashboardController::class, 'productStats']);
             Route::get('/balance', [DashboardController::class, 'getBalance']);
         });
 
-        // Manajemen Order
         Route::prefix('orders')->group(function () {
             Route::get('/', [OrderController::class, 'index']);
             Route::post('/{id}/confirm', [OrderController::class, 'confirm']);
             Route::post('/{orderId}/sync', [OrderController::class, 'sync']);
         });
 
-        // Manajemen Produk
         Route::prefix('products')->group(function () {
             Route::post('/sync', [ProductController::class, 'sync']);
             Route::post('/bulk-margin', [ProductController::class, 'bulkUpdateMargin']);

@@ -21,6 +21,9 @@ class CallbackController extends Controller
     /**
      * POST /api/callback/digiflazz
      * Endpoint ini dipanggil oleh server Digiflazz, bukan oleh user.
+     * 
+     * ✅ PERBAIKAN: Tambah lockForUpdate() di dalam DB transaction
+     * untuk mencegah race condition jika Digiflazz kirim callback duplikat
      */
     public function digiflazz(Request $request): JsonResponse
     {
@@ -42,69 +45,67 @@ class CallbackController extends Controller
                 return response()->json(['success' => false, 'message' => 'Signature tidak valid.'], 401);
             }
 
-            // ── Langkah 2: Cari order ─────────────────────────────────────────
-            $order = Order::where('order_id', $refId)->first();
-
-            if (!$order) {
-                Log::warning('Digiflazz callback: order tidak ditemukan', ['ref_id' => $refId]);
-                return response()->json(['success' => false, 'message' => 'Order tidak ditemukan.'], 404);
-            }
-
-            // Jika status sudah final, abaikan callback duplikat
-            if ($order->status->isFinal()) {
-                Log::info('Digiflazz callback: status sudah final, diabaikan', [
-                    'order_id' => $order->order_id,
-                    'status'   => $order->status->value,
-                ]);
-                return response()->json(['success' => true, 'message' => 'Status sudah final.'], 200);
-            }
-
-            // ── Langkah 3: Proses status ──────────────────────────────────────
             $status  = $request->input('data.status');
             $sn      = $request->input('data.sn');
             $message = $request->input('data.message');
 
-            DB::beginTransaction();
+            // ✅ PERBAIKAN: Wrap semua proses dalam DB transaction + lockForUpdate
+            DB::transaction(function () use ($refId, $status, $sn, $message) {
+                
+                // ✅ KUNCI INI: lockForUpdate() memastikan hanya 1 request yang bisa proses order ini
+                // Request kedua akan wait sampai request pertama selesai commit
+                $order = Order::where('order_id', $refId)->lockForUpdate()->first();
 
-            if ($status === 'Sukses') {
-                $order->update([
-                    'status' => OrderStatus::SUCCESS->value,
-                    'sn'     => $sn,
-                ]);
-                $order->logStatusChange(OrderStatus::SUCCESS, 'Sukses via callback Digiflazz. SN: ' . $sn);
+                if (!$order) {
+                    Log::warning('Digiflazz callback: order tidak ditemukan', ['ref_id' => $refId]);
+                    return;
+                }
 
-                DB::commit();
+                // Jika status sudah final, skip (callback duplikat)
+                if ($order->status->isFinal()) {
+                    Log::info('Digiflazz callback: status sudah final, diabaikan', [
+                        'order_id' => $order->order_id,
+                        'status'   => $order->status->value,
+                    ]);
+                    return;
+                }
 
-                Log::info('Order sukses via callback', ['order_id' => $order->order_id, 'sn' => $sn]);
-                $this->notifyTelegram($order, 'SUKSES', $sn);
-                $this->dispatchSuccessEmail($order);
+                // ── Langkah 3: Proses status ──────────────────────────────────────
+                if ($status === 'Sukses') {
+                    $order->update([
+                        'status' => OrderStatus::SUCCESS->value,
+                        'sn'     => $sn,
+                    ]);
+                    $order->logStatusChange(OrderStatus::SUCCESS, 'Sukses via callback Digiflazz. SN: ' . $sn);
 
-            } elseif ($status === 'Gagal') {
-                $order->update(['status' => OrderStatus::FAILED->value]);
-                $order->logStatusChange(OrderStatus::FAILED, 'Gagal via callback Digiflazz. Alasan: ' . $message);
+                    Log::info('Order sukses via callback', ['order_id' => $order->order_id, 'sn' => $sn]);
+                    
+                    // Kirim notifikasi & email (masih di dalam transaction)
+                    $this->notifyTelegram($order, 'SUKSES', $sn);
+                    $this->dispatchSuccessEmail($order);
 
-                DB::commit();
+                } elseif ($status === 'Gagal') {
+                    $order->update(['status' => OrderStatus::FAILED->value]);
+                    $order->logStatusChange(OrderStatus::FAILED, 'Gagal via callback Digiflazz. Alasan: ' . $message);
 
-                Log::warning('Order gagal via callback', [
-                    'order_id' => $order->order_id,
-                    'message'  => $message,
-                ]);
-                $this->notifyTelegram($order, 'GAGAL', null, $message);
-                $this->sendFailedEmail($order, $message);
-
-            } else {
-                DB::rollBack();
-                Log::info('Digiflazz callback: status non-final', [
-                    'order_id' => $order->order_id,
-                    'status'   => $status,
-                ]);
-            }
+                    Log::warning('Order gagal via callback', [
+                        'order_id' => $order->order_id,
+                        'message'  => $message,
+                    ]);
+                    
+                    $this->notifyTelegram($order, 'GAGAL', null, $message);
+                    $this->sendFailedEmail($order, $message);
+                }
+                
+                // Transaction akan auto-commit di sini
+                // Lock akan auto-release setelah commit
+            });
 
             // Selalu balas 200 ke Digiflazz agar tidak retry terus
             return response()->json(['success' => true, 'message' => 'Callback diproses.'], 200);
 
         } catch (Exception $e) {
-            DB::rollBack();
+            // Rollback otomatis karena exception di dalam transaction
             Log::error('Digiflazz callback exception', [
                 'error'   => $e->getMessage(),
                 'payload' => $request->all(),

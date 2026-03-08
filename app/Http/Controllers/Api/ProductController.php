@@ -8,6 +8,7 @@ use App\Services\DigiflazzService;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -17,21 +18,23 @@ class ProductController extends Controller
         protected DigiflazzService $digiflazzService
     ) {}
 
-    /**
-     * GET /api/products
-     * Daftar produk aktif untuk pelanggan.
-     */
     public function index(Request $request): JsonResponse
     {
         try {
             $category = $request->query('category');
-            $query    = Product::active();
+            
+            // ✅ PERBAIKAN: Cache product list selama 10 menit
+            $cacheKey = 'products:list:' . ($category ?? 'all');
+            
+            $products = Cache::remember($cacheKey, now()->addMinutes(10), function () use ($category) {
+                $query = Product::active();
 
-            if ($category) {
-                $query->where('category', $category);
-            }
+                if ($category) {
+                    $query->where('category', $category);
+                }
 
-            $products = $query->orderBy('category')->orderBy('name')->get();
+                return $query->orderBy('category')->orderBy('name')->get();
+            });
 
             return response()->json(['success' => true, 'data' => $products], 200);
 
@@ -41,10 +44,6 @@ class ProductController extends Controller
         }
     }
 
-    /**
-     * PUT /api/admin/{path}/products/{id}
-     * Update harga jual satu produk.
-     */
     public function update(Request $request, int $id): JsonResponse
     {
         $request->validate([
@@ -58,6 +57,9 @@ class ProductController extends Controller
                 'selling_price' => (float) $request->selling_price,
             ]);
 
+            // ✅ PERBAIKAN: Clear cache setelah update
+            $this->clearProductCache();
+
             return response()->json([
                 'success' => true,
                 'message' => 'Harga berhasil diperbarui.',
@@ -69,14 +71,6 @@ class ProductController extends Controller
         }
     }
 
-    /**
-     * POST /api/admin/{path}/products/bulk-margin
-     * Update margin semua produk sekaligus.
-     *
-     * Fix PROD-01: sebelumnya ada dua UPDATE sekaligus —
-     * DB::table()->update() dengan DB::raw('cost_price + ?') yang INVALID
-     * diikuti DB::statement() yang benar. Sekarang hanya satu query.
-     */
     public function bulkUpdateMargin(Request $request): JsonResponse
     {
         $request->validate([
@@ -86,10 +80,12 @@ class ProductController extends Controller
         try {
             $margin = (float) $request->margin;
 
-            // Satu statement dengan parameter binding — aman dari SQL injection
             DB::statement('UPDATE products SET selling_price = cost_price + ?', [$margin]);
 
             $updatedCount = Product::count();
+
+            // ✅ PERBAIKAN: Clear cache setelah bulk update
+            $this->clearProductCache();
 
             return response()->json([
                 'success' => true,
@@ -103,10 +99,6 @@ class ProductController extends Controller
         }
     }
 
-    /**
-     * POST /api/admin/{path}/products/sync
-     * Sinkronisasi produk dari Digiflazz API.
-     */
     public function sync(Request $request): JsonResponse
     {
         try {
@@ -120,7 +112,12 @@ class ProductController extends Controller
             $defaultMargin = (float) config('feepay.margin', 2000);
             $syncedCount   = 0;
 
+            // ✅ PERBAIKAN: Batch upsert untuk performa
             DB::transaction(function () use ($response, $defaultMargin, &$syncedCount) {
+                $batchSize = 100;
+                $batch = [];
+                $existingSKUs = Product::pluck('selling_price', 'sku')->toArray();
+                
                 foreach ($response['data'] as $item) {
                     $sku = $item['buyer_sku_code'] ?? null;
                     if (!$sku) continue;
@@ -130,32 +127,51 @@ class ProductController extends Controller
                         ? 'active'
                         : 'inactive';
 
-                    $existing = Product::where('sku', $sku)->first();
-
-                    if ($existing) {
-                        $sellingPrice = (float) $existing->selling_price;
-                        if ($costPrice >= $sellingPrice) {
-                            $sellingPrice = $costPrice + $defaultMargin;
-                        }
+                    // Preserve custom selling price
+                    if (isset($existingSKUs[$sku])) {
+                        $currentSellingPrice = (float) $existingSKUs[$sku];
+                        $sellingPrice = $costPrice >= $currentSellingPrice 
+                            ? $costPrice + $defaultMargin 
+                            : $currentSellingPrice;
                     } else {
                         $sellingPrice = $costPrice + $defaultMargin;
                     }
 
-                    Product::updateOrCreate(
-                        ['sku' => $sku],
-                        [
-                            'name'          => $item['product_name'] ?? 'Unknown',
-                            'category'      => $item['category']     ?? 'General',
-                            'brand'         => $item['brand']        ?? null,
-                            'cost_price'    => $costPrice,
-                            'selling_price' => $sellingPrice,
-                            'status'        => $status,
-                        ]
-                    );
+                    $batch[] = [
+                        'sku'           => $sku,
+                        'name'          => $item['product_name'] ?? 'Unknown',
+                        'category'      => $item['category'] ?? 'General',
+                        'brand'         => $item['brand'] ?? null,
+                        'cost_price'    => $costPrice,
+                        'selling_price' => $sellingPrice,
+                        'status'        => $status,
+                        'created_at'    => now(),
+                        'updated_at'    => now(),
+                    ];
 
                     $syncedCount++;
+
+                    if (count($batch) >= $batchSize) {
+                        Product::upsert(
+                            $batch,
+                            ['sku'],
+                            ['name', 'category', 'brand', 'cost_price', 'selling_price', 'status', 'updated_at']
+                        );
+                        $batch = [];
+                    }
+                }
+
+                if (!empty($batch)) {
+                    Product::upsert(
+                        $batch,
+                        ['sku'],
+                        ['name', 'category', 'brand', 'cost_price', 'selling_price', 'status', 'updated_at']
+                    );
                 }
             });
+
+            // ✅ PERBAIKAN: Clear cache setelah sync
+            $this->clearProductCache();
 
             return response()->json([
                 'success' => true,
@@ -166,6 +182,18 @@ class ProductController extends Controller
         } catch (Exception $e) {
             Log::error('ProductController::sync gagal', ['error' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => 'Gagal sinkronisasi: ' . $e->getMessage()], 500);
+        }
+    }
+
+    // ✅ PERBAIKAN: Helper untuk clear product cache
+    private function clearProductCache(): void
+    {
+        Cache::forget('products:list:all');
+        Cache::forget('dashboard:product_stats');
+        Cache::forget('dashboard:total_products');
+        
+        foreach (Product::distinct()->pluck('category') as $cat) {
+            Cache::forget('products:list:' . $cat);
         }
     }
 }
