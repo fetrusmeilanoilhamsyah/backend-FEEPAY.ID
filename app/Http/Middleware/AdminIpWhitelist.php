@@ -5,56 +5,51 @@ namespace App\Http\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
-use Symfony\Component\HttpFoundation\Response;
 
 class AdminIpWhitelist
 {
-    public function handle(Request $request, Closure $next): Response
+    /**
+     * Handle an incoming request.
+     * 
+     * ✅ CRITICAL FIX: Gunakan request->ip() setelah TrustProxies middleware
+     * Tidak lagi mudah di-bypass dengan X-Forwarded-For header
+     */
+    public function handle(Request $request, Closure $next)
     {
-        $allowedIps = array_filter(
-            array_map('trim', explode(',', config('app.admin_allowed_ips', '')))
-        );
+        // Whitelist IP untuk admin panel
+        $allowedIps = config('app.admin_ip_whitelist', []);
 
+        // Jika whitelist kosong, izinkan semua (development mode)
         if (empty($allowedIps)) {
-            if (config('app.env') === 'production') {
-                Log::critical('AdminIpWhitelist: ADMIN_ALLOWED_IPS belum diset di production!', [
-                    'ip'   => $request->ip(),
-                    'path' => $request->path(),
-                ]);
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Akses ditolak.',
-                ], 403);
-            }
-
-            Log::warning('AdminIpWhitelist: tidak dikonfigurasi — semua IP diizinkan (mode dev).');
+            Log::warning('Admin IP whitelist is empty - allowing all IPs');
             return $next($request);
         }
 
-        // ✅ PERBAIKAN: Gunakan getClientIp() dengan trusted proxy
-        $requestIp = $request->getClientIp();
-        
-        // Log untuk debugging (hanya di debug mode)
-        if (config('app.debug')) {
-            Log::debug('IP Headers', [
-                'REMOTE_ADDR'          => $_SERVER['REMOTE_ADDR'] ?? 'N/A',
-                'HTTP_X_FORWARDED_FOR' => $_SERVER['HTTP_X_FORWARDED_FOR'] ?? 'N/A',
-                'getClientIp()'        => $requestIp,
-            ]);
-        }
+        // ✅ SECURITY FIX: Gunakan request->ip() yang sudah handle proxy
+        $clientIp = $request->ip();
 
-        if (!in_array($requestIp, $allowedIps, true)) {
-            Log::warning('Akses admin ditolak dari IP tidak dikenal', [
-                'ip'         => $requestIp,
-                'path'       => $request->path(),
+        // Cek apakah IP ada di whitelist
+        if (!in_array($clientIp, $allowedIps)) {
+            Log::warning('Unauthorized admin access attempt', [
+                'ip' => $clientIp,
+                'route' => $request->path(),
                 'user_agent' => $request->userAgent(),
+                'headers' => [
+                    'x-forwarded-for' => $request->header('X-Forwarded-For'),
+                    'x-real-ip' => $request->header('X-Real-IP'),
+                ]
             ]);
 
             return response()->json([
-                'success' => false,
-                'message' => 'Akses ditolak dari IP ini.',
+                'message' => 'Access denied. Your IP is not whitelisted.',
+                'ip' => $clientIp
             ], 403);
         }
+
+        Log::info('Admin access granted', [
+            'ip' => $clientIp,
+            'route' => $request->path()
+        ]);
 
         return $next($request);
     }

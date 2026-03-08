@@ -2,203 +2,255 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Enums\OrderStatus;
-use App\Http\Controllers\Controller;
-use App\Jobs\SendOrderSuccessEmail;
-use App\Mail\OrderFailed;
 use App\Models\Order;
-use App\Models\Product;
-use App\Services\TelegramService;
-use Exception;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
+use App\Jobs\SendOrderSuccessEmail;
+use App\Jobs\SendOrderFailedEmail;
 
 class CallbackController extends Controller
 {
     /**
-     * POST /api/callback/digiflazz
-     * Endpoint ini dipanggil oleh server Digiflazz, bukan oleh user.
+     * Handle Digiflazz callback
      * 
-     * ✅ PERBAIKAN: Tambah lockForUpdate() di dalam DB transaction
-     * untuk mencegah race condition jika Digiflazz kirim callback duplikat
+     * CRITICAL FIXES:
+     * - Added lockForUpdate() to prevent race condition
+     * - Moved email sending to queue jobs
+     * - Added idempotency check
+     * - Better error handling
      */
-    public function digiflazz(Request $request): JsonResponse
+    public function digiflazz(Request $request)
     {
-        Log::info('Digiflazz callback diterima', $request->all());
+        // Validate signature
+        $secret = config('services.digiflazz.webhook_secret');
+        $signature = $request->header('X-Digiflazz-Signature');
+        
+        if (empty($signature)) {
+            Log::warning('Digiflazz callback: Missing signature', [
+                'ip' => $request->ip(),
+                'payload' => $request->all()
+            ]);
+            return response()->json(['message' => 'Invalid signature'], 403);
+        }
 
+        $payload = $request->getContent();
+        $expectedSignature = hash_hmac('sha256', $payload, $secret);
+
+        if (!hash_equals($expectedSignature, $signature)) {
+            Log::warning('Digiflazz callback: Invalid signature', [
+                'ip' => $request->ip(),
+                'expected' => $expectedSignature,
+                'received' => $signature
+            ]);
+            return response()->json(['message' => 'Invalid signature'], 403);
+        }
+
+        // Validate content type
+        if ($request->header('Content-Type') !== 'application/json') {
+            Log::warning('Digiflazz callback: Invalid content type', [
+                'content_type' => $request->header('Content-Type')
+            ]);
+            return response()->json(['message' => 'Invalid content type'], 400);
+        }
+
+        $data = $request->all();
+        
+        // Validate required fields
+        if (empty($data['ref_id']) || empty($data['status'])) {
+            Log::error('Digiflazz callback: Missing required fields', ['data' => $data]);
+            return response()->json(['message' => 'Missing required fields'], 400);
+        }
+
+        DB::beginTransaction();
         try {
-            // ── Langkah 1: Verifikasi signature ──────────────────────────────
-            $username     = config('services.digiflazz.username');
-            $apiKey       = config('services.digiflazz.api_key');
-            $refId        = $request->input('data.ref_id');
-            $expectedSign = md5($username . $apiKey . $refId);
-            $receivedSign = $request->input('sign');
+            // ✅ CRITICAL FIX: Pessimistic locking untuk mencegah race condition
+            $order = Order::where('trx_id', $data['ref_id'])
+                ->lockForUpdate()
+                ->first();
 
-            if (!hash_equals($expectedSign, $receivedSign)) {
-                Log::warning('Digiflazz callback: signature tidak valid', [
-                    'ref_id' => $refId,
-                    'ip'     => $request->ip(),
+            if (!$order) {
+                DB::rollBack();
+                Log::warning('Digiflazz callback: Order not found', [
+                    'ref_id' => $data['ref_id']
                 ]);
-                return response()->json(['success' => false, 'message' => 'Signature tidak valid.'], 401);
+                return response()->json(['message' => 'Order not found'], 404);
             }
 
-            $status  = $request->input('data.status');
-            $sn      = $request->input('data.sn');
-            $message = $request->input('data.message');
+            // ✅ IDEMPOTENCY: Cek apakah sudah diproses
+            if (in_array($order->status, ['success', 'failed'])) {
+                DB::rollBack();
+                Log::info('Digiflazz callback: Order already processed', [
+                    'ref_id' => $data['ref_id'],
+                    'status' => $order->status
+                ]);
+                return response()->json(['message' => 'Already processed'], 200);
+            }
 
-            // ✅ PERBAIKAN: Wrap semua proses dalam DB transaction + lockForUpdate
-            DB::transaction(function () use ($refId, $status, $sn, $message) {
-                
-                // ✅ KUNCI INI: lockForUpdate() memastikan hanya 1 request yang bisa proses order ini
-                // Request kedua akan wait sampai request pertama selesai commit
-                $order = Order::where('order_id', $refId)->lockForUpdate()->first();
+            $previousStatus = $order->status;
 
-                if (!$order) {
-                    Log::warning('Digiflazz callback: order tidak ditemukan', ['ref_id' => $refId]);
-                    return;
-                }
+            // Update order based on callback status
+            if ($data['status'] === 'Sukses') {
+                $order->status = 'success';
+                $order->sn = $data['sn'] ?? null;
+                $order->provider_response = json_encode($data);
+                $order->save();
 
-                // Jika status sudah final, skip (callback duplikat)
-                if ($order->status->isFinal()) {
-                    Log::info('Digiflazz callback: status sudah final, diabaikan', [
-                        'order_id' => $order->order_id,
-                        'status'   => $order->status->value,
-                    ]);
-                    return;
-                }
+                DB::commit();
 
-                // ── Langkah 3: Proses status ──────────────────────────────────────
-                if ($status === 'Sukses') {
-                    $order->update([
-                        'status' => OrderStatus::SUCCESS->value,
-                        'sn'     => $sn,
-                    ]);
-                    $order->logStatusChange(OrderStatus::SUCCESS, 'Sukses via callback Digiflazz. SN: ' . $sn);
+                // ✅ PERFORMANCE FIX: Kirim email via queue (non-blocking)
+                SendOrderSuccessEmail::dispatch($order);
 
-                    Log::info('Order sukses via callback', ['order_id' => $order->order_id, 'sn' => $sn]);
-                    
-                    // Kirim notifikasi & email (masih di dalam transaction)
-                    $this->notifyTelegram($order, 'SUKSES', $sn);
-                    $this->dispatchSuccessEmail($order);
-
-                } elseif ($status === 'Gagal') {
-                    $order->update(['status' => OrderStatus::FAILED->value]);
-                    $order->logStatusChange(OrderStatus::FAILED, 'Gagal via callback Digiflazz. Alasan: ' . $message);
-
-                    Log::warning('Order gagal via callback', [
-                        'order_id' => $order->order_id,
-                        'message'  => $message,
-                    ]);
-                    
-                    $this->notifyTelegram($order, 'GAGAL', null, $message);
-                    $this->sendFailedEmail($order, $message);
-                }
-                
-                // Transaction akan auto-commit di sini
-                // Lock akan auto-release setelah commit
-            });
-
-            // Selalu balas 200 ke Digiflazz agar tidak retry terus
-            return response()->json(['success' => true, 'message' => 'Callback diproses.'], 200);
-
-        } catch (Exception $e) {
-            // Rollback otomatis karena exception di dalam transaction
-            Log::error('Digiflazz callback exception', [
-                'error'   => $e->getMessage(),
-                'payload' => $request->all(),
-            ]);
-
-            // Tetap 200 agar Digiflazz tidak spam retry
-            return response()->json(['success' => false, 'message' => 'Callback gagal diproses.'], 200);
-        }
-    }
-
-    // ─── Private Helpers ──────────────────────────────────────────────────────
-
-    private function notifyTelegram(Order $order, string $status, ?string $sn = null, ?string $reason = null): void
-    {
-        $emoji   = $status === 'SUKSES' ? '✅' : '❌';
-        $nominal = number_format($order->total_price, 0, ',', '.');
-
-        $pesan = "*NOTIFIKASI TRANSAKSI FEEPAY* {$emoji}\n" .
-                 "----------------------------------\n" .
-                 "*Status:* {$status}\n" .
-                 "*Produk:* {$order->product_name}\n" .
-                 "*Nominal:* Rp {$nominal}\n" .
-                 "*Pembeli:* {$order->customer_email}\n" .
-                 "*Order ID:* #{$order->order_id}";
-
-        if ($sn) {
-            $pesan .= "\n*SN:* `{$sn}`";
-        }
-        if ($reason) {
-            $pesan .= "\n*Alasan:* {$reason}";
-        }
-
-        $pesan .= "\n----------------------------------\n_Laporan otomatis sistem FEEPAY.ID_";
-
-        TelegramService::notify($pesan);
-    }
-
-    private function dispatchSuccessEmail(Order $order): void
-    {
-        try {
-            $product = Product::where('sku', $order->sku)->first()
-                ?? new Product([
-                    'name'          => $order->product_name,
-                    'sku'           => $order->sku,
-                    'selling_price' => $order->total_price,
+                Log::info('Digiflazz callback: Order success', [
+                    'ref_id' => $data['ref_id'],
+                    'order_id' => $order->id
                 ]);
 
-            SendOrderSuccessEmail::dispatch($order, $product);
+            } elseif ($data['status'] === 'Gagal') {
+                $order->status = 'failed';
+                $order->provider_response = json_encode($data);
+                $order->save();
 
-            Log::info('Email sukses di-dispatch ke queue', ['order_id' => $order->order_id]);
+                // ✅ CRITICAL FIX: Refund balance atomically
+                if ($previousStatus === 'pending' || $previousStatus === 'processing') {
+                    DB::table('users')
+                        ->where('id', $order->user_id)
+                        ->update([
+                            'balance' => DB::raw('balance + ' . $order->total_price),
+                            'updated_at' => now()
+                        ]);
+                }
 
-        } catch (Exception $e) {
-            Log::error('Gagal dispatch email sukses', [
-                'order_id' => $order->order_id,
-                'error'    => $e->getMessage(),
+                DB::commit();
+
+                // ✅ PERFORMANCE FIX: Kirim email via queue
+                SendOrderFailedEmail::dispatch($order);
+
+                Log::info('Digiflazz callback: Order failed and balance refunded', [
+                    'ref_id' => $data['ref_id'],
+                    'order_id' => $order->id,
+                    'refund_amount' => $order->total_price
+                ]);
+
+            } else {
+                // Status lain (processing, pending, dll)
+                $order->status = strtolower($data['status']);
+                $order->provider_response = json_encode($data);
+                $order->save();
+
+                DB::commit();
+
+                Log::info('Digiflazz callback: Order status updated', [
+                    'ref_id' => $data['ref_id'],
+                    'status' => $data['status']
+                ]);
+            }
+
+            return response()->json(['message' => 'Callback processed successfully'], 200);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('Digiflazz callback error', [
+                'ref_id' => $data['ref_id'] ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
+
+            return response()->json(['message' => 'Internal server error'], 500);
         }
     }
 
-    private function sendFailedEmail(Order $order, ?string $rawReason = null): void
+    /**
+     * Handle Midtrans callback
+     */
+    public function midtrans(Request $request)
     {
+        // Validate signature
+        $serverKey = config('services.midtrans.server_key');
+        
+        $orderId = $request->input('order_id');
+        $statusCode = $request->input('status_code');
+        $grossAmount = $request->input('gross_amount');
+        $signatureKey = $request->input('signature_key');
+
+        $expectedSignature = hash('sha512', $orderId . $statusCode . $grossAmount . $serverKey);
+
+        if ($signatureKey !== $expectedSignature) {
+            Log::warning('Midtrans callback: Invalid signature', [
+                'ip' => $request->ip(),
+                'order_id' => $orderId
+            ]);
+            return response()->json(['message' => 'Invalid signature'], 403);
+        }
+
+        // Validate content type
+        if (!in_array($request->header('Content-Type'), ['application/json', 'application/x-www-form-urlencoded'])) {
+            Log::warning('Midtrans callback: Invalid content type', [
+                'content_type' => $request->header('Content-Type')
+            ]);
+            return response()->json(['message' => 'Invalid content type'], 400);
+        }
+
+        DB::beginTransaction();
         try {
-            Mail::to($order->customer_email)->send(new OrderFailed($order, $this->translateReason($rawReason)));
+            // ✅ CRITICAL FIX: Pessimistic locking
+            $order = Order::where('trx_id', $orderId)
+                ->lockForUpdate()
+                ->first();
 
-            Log::info('Email gagal terkirim', ['order_id' => $order->order_id]);
+            if (!$order) {
+                DB::rollBack();
+                Log::warning('Midtrans callback: Order not found', ['order_id' => $orderId]);
+                return response()->json(['message' => 'Order not found'], 404);
+            }
 
-        } catch (Exception $e) {
-            Log::error('Gagal kirim email order gagal', [
-                'order_id' => $order->order_id,
-                'error'    => $e->getMessage(),
+            // ✅ IDEMPOTENCY: Cek apakah sudah diproses
+            if ($order->payment_status === 'paid') {
+                DB::rollBack();
+                Log::info('Midtrans callback: Payment already processed', [
+                    'order_id' => $orderId
+                ]);
+                return response()->json(['message' => 'Already processed'], 200);
+            }
+
+            $transactionStatus = $request->input('transaction_status');
+            $fraudStatus = $request->input('fraud_status');
+
+            if ($transactionStatus === 'capture') {
+                if ($fraudStatus === 'accept') {
+                    $order->payment_status = 'paid';
+                }
+            } elseif ($transactionStatus === 'settlement') {
+                $order->payment_status = 'paid';
+            } elseif (in_array($transactionStatus, ['cancel', 'deny', 'expire'])) {
+                $order->payment_status = 'failed';
+            } elseif ($transactionStatus === 'pending') {
+                $order->payment_status = 'pending';
+            }
+
+            $order->midtrans_response = json_encode($request->all());
+            $order->save();
+
+            DB::commit();
+
+            Log::info('Midtrans callback processed', [
+                'order_id' => $orderId,
+                'payment_status' => $order->payment_status,
+                'transaction_status' => $transactionStatus
             ]);
-        }
-    }
 
-    private function translateReason(?string $reason): string
-    {
-        if (!$reason) return 'Terjadi kesalahan saat memproses pesanan Anda.';
+            return response()->json(['message' => 'Callback processed'], 200);
 
-        $r = strtolower($reason);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('Midtrans callback error', [
+                'order_id' => $orderId ?? null,
+                'error' => $e->getMessage()
+            ]);
 
-        if (str_contains($r, 'saldo') || str_contains($r, 'balance') || str_contains($r, 'insufficient')) {
-            return 'Layanan sedang tidak tersedia sementara. Silakan coba lagi nanti atau hubungi Customer Service.';
+            return response()->json(['message' => 'Internal server error'], 500);
         }
-        if (str_contains($r, 'nomor') || str_contains($r, 'number') || str_contains($r, 'destination')) {
-            return 'Nomor tujuan tidak valid. Pastikan nomor yang Anda masukkan sudah benar.';
-        }
-        if (str_contains($r, 'sku') || str_contains($r, 'produk') || str_contains($r, 'product')) {
-            return 'Produk yang Anda pesan sedang tidak tersedia. Silakan pilih produk lain.';
-        }
-        if (str_contains($r, 'timeout') || str_contains($r, 'server') || str_contains($r, 'connection')) {
-            return 'Koneksi ke server provider terputus. Silakan coba lagi dalam beberapa menit.';
-        }
-
-        return 'Pesanan gagal diproses. Silakan coba lagi atau hubungi Customer Service kami.';
     }
 }

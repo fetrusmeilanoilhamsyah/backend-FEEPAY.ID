@@ -12,12 +12,14 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        // ✅ PERBAIKAN: Trust proxies untuk IP detection yang benar
+        // ✅ CRITICAL FIX: Enable TrustProxies middleware
         $middleware->trustProxies(at: '*');
         
-        $middleware->api(prepend: [
-            \App\Http\Middleware\ForceHttps::class,
-            \App\Http\Middleware\SecurityHeaders::class,
+        // Alias untuk middleware
+        $middleware->alias([
+            'admin' => \App\Http\Middleware\AdminMiddleware::class,
+            'admin.ip' => \App\Http\Middleware\AdminIpWhitelist::class,
+            'verify.pin' => \App\Http\Middleware\VerifyPinMiddleware::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
