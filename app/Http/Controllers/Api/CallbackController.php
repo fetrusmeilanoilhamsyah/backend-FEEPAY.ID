@@ -27,20 +27,78 @@ class CallbackController extends Controller
         Log::info('Digiflazz callback diterima', $request->all());
 
         try {
-            // ── Langkah 1: Verifikasi signature ──────────────────────────────
-            $username     = config('services.digiflazz.username');
-            $apiKey       = config('services.digiflazz.api_key');
-            $refId        = $request->input('data.ref_id');
-            $expectedSign = md5($username . $apiKey . $refId);
+            // ══════════════════════════════════════════════════════════════
+            // ✅ FIX #1: CEK SIGNATURE TIDAK BOLEH KOSONG!
+            // ══════════════════════════════════════════════════════════════
             $receivedSign = $request->input('sign');
 
-            if (!hash_equals($expectedSign, $receivedSign)) {
-                Log::warning('Digiflazz callback: signature tidak valid', [
-                    'ref_id' => $refId,
-                    'ip'     => $request->ip(),
+            if (empty($receivedSign)) {
+                Log::critical('⚠️ Digiflazz callback TANPA SIGNATURE!', [
+                    'ip'      => $request->ip(),
+                    'payload' => $request->all()
                 ]);
-                return response()->json(['success' => false, 'message' => 'Signature tidak valid.'], 401);
+                return response()->json([
+                    'success' => false, 
+                    'message' => 'Signature required.'
+                ], 401);
             }
+
+            // ══════════════════════════════════════════════════════════════
+            // ✅ FIX #2: CEK ref_id TIDAK BOLEH KOSONG!
+            // ══════════════════════════════════════════════════════════════
+            $refId = $request->input('data.ref_id');
+
+            if (empty($refId)) {
+                Log::warning('⚠️ Digiflazz callback TANPA ref_id!', [
+                    'ip' => $request->ip()
+                ]);
+                return response()->json([
+                    'success' => false, 
+                    'message' => 'ref_id required.'
+                ], 400);
+            }
+
+            // ══════════════════════════════════════════════════════════════
+            // ✅ FIX #3: CEK IP HARUS DARI DIGIFLAZZ!
+            // ══════════════════════════════════════════════════════════════
+            $allowedIps = explode(',', config('services.digiflazz.allowed_ips', ''));
+            $allowedIps = array_filter(array_map('trim', $allowedIps));
+
+            if (!empty($allowedIps) && !in_array($request->ip(), $allowedIps)) {
+                Log::critical('🚨 Digiflazz callback dari IP ASING!', [
+                    'ip'           => $request->ip(),
+                    'ref_id'       => $refId,
+                    'allowed_ips'  => $allowedIps
+                ]);
+                return response()->json([
+                    'success' => false, 
+                    'message' => 'Unauthorized IP.'
+                ], 403);
+            }
+
+            // ══════════════════════════════════════════════════════════════
+            // VALIDASI SIGNATURE (SUDAH ADA, TAPI SEKARANG LEBIH AMAN)
+            // ══════════════════════════════════════════════════════════════
+            $username     = config('services.digiflazz.username');
+            $apiKey       = config('services.digiflazz.api_key');
+            $expectedSign = md5($username . $apiKey . $refId);
+
+            if (!hash_equals($expectedSign, (string) $receivedSign)) {
+                Log::warning('⚠️ Digiflazz callback: signature TIDAK VALID', [
+                    'ref_id'   => $refId,
+                    'ip'       => $request->ip(),
+                    'expected' => substr($expectedSign, 0, 10) . '...',
+                    'received' => substr($receivedSign, 0, 10) . '...',
+                ]);
+                return response()->json([
+                    'success' => false, 
+                    'message' => 'Signature tidak valid.'
+                ], 401);
+            }
+
+            // ══════════════════════════════════════════════════════════════
+            // SISANYA TETAP SAMA (TIDAK DIUBAH)
+            // ══════════════════════════════════════════════════════════════
 
             // ── Langkah 2: Cari order ─────────────────────────────────────────
             $order = Order::where('order_id', $refId)->first();
@@ -115,7 +173,7 @@ class CallbackController extends Controller
         }
     }
 
-    // ─── Private Helpers ──────────────────────────────────────────────────────
+    // ─── Private Helpers (TIDAK DIUBAH) ───────────────────────────────────────
 
     private function notifyTelegram(Order $order, string $status, ?string $sn = null, ?string $reason = null): void
     {

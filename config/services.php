@@ -11,10 +11,11 @@ return [
     ],
 
     'digiflazz' => [
-        'username' => env('DIGIFLAZZ_USERNAME'),
-        'api_key'  => env('DIGIFLAZZ_API_KEY'),
-        'base_url' => env('DIGIFLAZZ_BASE_URL', 'https://api.digiflazz.com/v1'),
-    ],
+    'username' => env('DIGIFLAZZ_USERNAME'),
+    'api_key'  => env('DIGIFLAZZ_API_KEY'),
+    'base_url' => env('DIGIFLAZZ_BASE_URL', 'https://api.digiflazz.com/v1'),
+    'allowed_ips' => env('DIGIFLAZZ_ALLOWED_IPS', ''), // ← TAMBAH INI
+],
 
     'telegram' => [
         'bot_token' => env('TELEGRAM_BOT_TOKEN'),

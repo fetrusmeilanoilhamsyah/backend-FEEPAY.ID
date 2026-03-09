@@ -5,11 +5,13 @@ namespace App\Models;
 use App\Enums\OrderStatus;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\SoftDeletes;  // ← TAMBAH INI
 
 class Order extends Model
 {
-    use HasFactory;
+    use HasFactory, SoftDeletes;  // ← TAMBAH SoftDeletes
 
+    // ✅ HANYA FIELD YANG AMAN BUAT USER
     protected $fillable = [
         'order_id',
         'sku',
@@ -18,6 +20,11 @@ class Order extends Model
         'zone_id',
         'customer_email',
         'total_price',
+    ];
+
+    // ✅ FIELD SENSITIF DIKUNCI (GAK BISA DIUBAH USER)
+    protected $guarded = [
+        'id',
         'status',
         'sn',
         'payment_id',
@@ -31,10 +38,11 @@ class Order extends Model
     ];
 
     protected $casts = [
-        'total_price'              => 'decimal:2',
-        'status'                   => OrderStatus::class,
-        'confirmed_at'             => 'datetime',
-        'midtrans_transaction_time'=> 'datetime',
+        'total_price'               => 'decimal:2',
+        'status'                    => OrderStatus::class,
+        'confirmed_at'              => 'datetime',
+        'midtrans_transaction_time' => 'datetime',
+        'deleted_at'                => 'datetime',  // ← TAMBAH INI
     ];
 
     // ─── Relationships ────────────────────────────────────────────────────────
@@ -53,7 +61,6 @@ class Order extends Model
 
     /**
      * Tandai order sebagai GAGAL dan catat history.
-     * Fix BUG-12: method ini sebelumnya tidak ada di model.
      */
     public function markAsFailed(?int $userId = null, ?string $reason = null): void
     {
