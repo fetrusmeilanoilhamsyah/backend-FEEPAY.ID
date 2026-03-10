@@ -210,7 +210,7 @@ class CallbackController extends Controller
                     'selling_price' => $order->total_price,
                 ]);
 
-            SendOrderSuccessEmail::dispatch($order, $product);
+            SendOrderSuccessEmail::dispatch($order);
 
             Log::info('Email sukses di-dispatch ke queue', ['order_id' => $order->order_id]);
 

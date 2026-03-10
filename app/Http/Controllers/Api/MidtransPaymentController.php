@@ -247,10 +247,14 @@ class MidtransPaymentController extends Controller
                 $target = $locked->target_number . ($locked->zone_id ?? '');
 
                 $digiflazzService = app(DigiflazzService::class);
-                $result           = $digiflazzService->placeOrder($locked->sku, $target, $locked->order_id);
+                $result = $digiflazzService->purchaseProduct($locked->sku, $target, $locked->order_id);
 
-                if (!$result['success']) {
-                    throw new Exception($result['message'] ?? 'Transaksi Digiflazz gagal.');
+                // purchaseProduct() return raw Digiflazz response: $result['data']['status']
+                // Status: "Sukses" | "Pending" | "Gagal"
+                // "Pending" = sedang diproses provider — normal, tunggu callback Digiflazz
+                $digiStatus = $result['data']['status'] ?? null;
+                if ($digiStatus === 'Gagal') {
+                    throw new Exception($result['data']['message'] ?? 'Transaksi Digiflazz gagal.');
                 }
 
                 $locked->logStatusChange(OrderStatus::PROCESSING, 'Order dikirim ke Digiflazz setelah pembayaran Midtrans.');
