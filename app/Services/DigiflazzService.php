@@ -2,201 +2,294 @@
 
 namespace App\Services;
 
-use App\Models\Product;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
-use Exception;
 
 class DigiflazzService
 {
-    protected string $username;
-    protected string $apiKey;
-    protected string $baseUrl;
+    private string $username;
+    private string $apiKey;
+    private string $baseUrl;
+    private int $timeout;
 
     public function __construct()
     {
+        // ✅ CRITICAL FIX: Load dari config, BUKAN hardcode
         $this->username = config('services.digiflazz.username');
-        $this->apiKey   = config('services.digiflazz.api_key');
-        $this->baseUrl  = config('services.digiflazz.base_url', 'https://api.digiflazz.com/v1');
-    }
+        $this->apiKey = config('services.digiflazz.api_key');
+        $this->baseUrl = config('services.digiflazz.base_url', 'https://api.digiflazz.com/v1');
+        $this->timeout = config('services.digiflazz.timeout', 30);
 
-    // ─── Private helpers ──────────────────────────────────────────────────────
-
-    private function sign(string $suffix): string
-    {
-        return md5($this->username . $this->apiKey . $suffix);
-    }
-
-    // ─── Public methods ───────────────────────────────────────────────────────
-
-    /**
-     * Ambil daftar harga dari Digiflazz API.
-     */
-    public function getPriceList(?string $category = null): array
-    {
-        try {
-            $payload = [
-                'cmd'      => 'prepaid',
-                'username' => $this->username,
-                'sign'     => $this->sign('df'),
-            ];
-
-            $response = Http::timeout(30)->post("{$this->baseUrl}/price-list", $payload);
-
-            if (!$response->successful()) {
-                throw new Exception('Gagal ambil price list: ' . $response->body());
-            }
-
-            $data = $response->json();
-            $items = $data['data'] ?? [];
-
-            if ($category) {
-                $items = array_values(array_filter($items, fn($i) =>
-                    isset($i['category']) && strtolower($i['category']) === strtolower($category)
-                ));
-            }
-
-            return ['success' => true, 'data' => array_values($items)];
-
-        } catch (Exception $e) {
-            Log::error('DigiflazzService::getPriceList error', ['message' => $e->getMessage()]);
-            return ['success' => false, 'message' => $e->getMessage(), 'data' => []];
+        if (empty($this->username) || empty($this->apiKey)) {
+            throw new \RuntimeException('Digiflazz credentials not configured properly');
         }
     }
 
     /**
-     * Kirim order ke Digiflazz.
-     * Harga TIDAK boleh dikirim dari sini — sudah dikunci di database sebelum method ini dipanggil.
-     */
-    public function placeOrder(string $sku, string $targetNumber, string $refId): array
-    {
-        try {
-            $payload = [
-                'username'       => $this->username,
-                'buyer_sku_code' => $sku,
-                'customer_no'    => $targetNumber,
-                'ref_id'         => $refId,
-                'sign'           => $this->sign($refId),
-            ];
-
-            $response = Http::timeout(60)->post("{$this->baseUrl}/transaction", $payload);
-            $data     = $response->json();
-
-            $apiData = $data['data'] ?? [];
-            $status  = strtolower($apiData['status'] ?? '');
-
-            // Tolak eksplisit dari provider
-            if ($response->failed() || $status === 'gagal') {
-                $pesan = $apiData['message'] ?? 'Transaksi ditolak provider.';
-
-                TelegramService::notify(
-                    "⚠️ *DIGIFLAZZ REJECTED*\n" .
-                    "----------------------------------\n" .
-                    "*Order ID:* #{$refId}\n" .
-                    "*SKU:* {$sku}\n" .
-                    "*Target:* {$targetNumber}\n" .
-                    "*Pesan:* _{$pesan}_\n" .
-                    "----------------------------------\n" .
-                    "_Laporan otomatis FEEPAY.ID_"
-                );
-
-                return ['success' => false, 'message' => $pesan, 'data' => $apiData];
-            }
-
-            Log::info('DigiflazzService::placeOrder success', [
-                'ref_id' => $refId,
-                'sku'    => $sku,
-                'status' => $status,
-            ]);
-
-            return ['success' => true, 'data' => $apiData];
-
-        } catch (Exception $e) {
-            Log::error('DigiflazzService::placeOrder exception', [
-                'message' => $e->getMessage(),
-                'sku'     => $sku,
-                'ref_id'  => $refId,
-            ]);
-
-            TelegramService::notify(
-                "🚨 *SYSTEM ERROR — placeOrder*\n" .
-                "----------------------------------\n" .
-                "*Order ID:* #{$refId}\n" .
-                "*Error:* " . $e->getMessage() . "\n" .
-                "----------------------------------\n" .
-                "_Cek log Laravel di VPS segera!_"
-            );
-
-            return ['success' => false, 'message' => $e->getMessage(), 'data' => null];
-        }
-    }
-
-    /**
-     * Cek status order dari Digiflazz.
-     */
-    public function checkOrderStatus(string $refId): array
-    {
-        try {
-            $payload = [
-                'username' => $this->username,
-                'ref_id'   => $refId,
-                'sign'     => $this->sign($refId),
-            ];
-
-            $response = Http::timeout(30)->post("{$this->baseUrl}/transaction", $payload);
-
-            if (!$response->successful()) {
-                throw new Exception('Gagal cek status: ' . $response->body());
-            }
-
-            $data = $response->json();
-            return ['success' => true, 'data' => $data['data'] ?? $data];
-
-        } catch (Exception $e) {
-            Log::error('DigiflazzService::checkOrderStatus error', [
-                'message' => $e->getMessage(),
-                'ref_id'  => $refId,
-            ]);
-            return ['success' => false, 'message' => $e->getMessage(), 'data' => null];
-        }
-    }
-
-    /**
-     * Cek saldo Digiflazz. Kirim peringatan Telegram jika di bawah threshold.
+     * Get balance dari Digiflazz
      */
     public function getBalance(): array
     {
         try {
-            $payload = [
-                'cmd'      => 'deposit',
-                'username' => $this->username,
-                'sign'     => $this->sign('depo'),
-            ];
-
-            $response = Http::timeout(30)->post("{$this->baseUrl}/cek-saldo", $payload);
+            $response = Http::timeout($this->timeout)
+                ->withHeaders(['Content-Type' => 'application/json'])
+                ->post("{$this->baseUrl}/cek-saldo", [
+                    'cmd' => 'deposit',
+                    'username' => $this->username,
+                    'sign' => $this->generateSignature('depo'),
+                ]);
 
             if (!$response->successful()) {
-                throw new Exception('Gagal cek saldo: ' . $response->body());
+                throw new \Exception('Digiflazz API error: ' . $response->status());
             }
 
-            $data    = $response->json();
-            $balance = $data['data']['deposit'] ?? 0;
+            $data = $response->json();
 
-            if ($balance < 100000) {
-                TelegramService::notify(
-                    "💸 *WARNING: SALDO TIPIS!*\n" .
-                    "----------------------------------\n" .
-                    "*Sisa Saldo:* Rp " . number_format($balance, 0, ',', '.') . "\n" .
-                    "----------------------------------\n" .
-                    "_Segera Top Up saldo Digiflazz!_"
+            Log::info('Digiflazz balance check', [
+                'balance' => $data['data']['deposit'] ?? null
+            ]);
+
+            return $data;
+
+        } catch (\Exception $e) {
+            Log::error('Digiflazz balance check failed', [
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Purchase product dari Digiflazz
+     * 
+     * @param string $buyerSkuCode SKU code produk
+     * @param string $customerId Customer ID (nomor HP, meter, dll)
+     * @param string $refId Reference ID (trx_id dari order)
+     * @return array
+     */
+    public function purchaseProduct(string $buyerSkuCode, string $customerId, string $refId): array
+    {
+        $payload = [
+            'username' => $this->username,
+            'buyer_sku_code' => $buyerSkuCode,
+            'customer_no' => $customerId,
+            'ref_id' => $refId,
+            'sign' => $this->generateSignature($refId),
+        ];
+
+        try {
+            $response = Http::timeout($this->timeout)
+                ->withHeaders(['Content-Type' => 'application/json'])
+                ->post("{$this->baseUrl}/transaction", $payload);
+
+            if (!$response->successful()) {
+                throw new \Exception('Digiflazz transaction failed: ' . $response->status());
+            }
+
+            $data = $response->json();
+
+            Log::info('Digiflazz purchase transaction', [
+                'sku' => $buyerSkuCode,
+                'customer' => $customerId,
+                'ref_id' => $refId,
+                'status' => $data['data']['status'] ?? null,
+                'message' => $data['data']['message'] ?? null
+            ]);
+
+            return $data;
+
+        } catch (\Exception $e) {
+            Log::error('Digiflazz purchase failed', [
+                'sku' => $buyerSkuCode,
+                'customer' => $customerId,
+                'ref_id' => $refId,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Get price list dari Digiflazz
+     * 
+     * ✅ PERFORMANCE FIX: Ditambahkan caching 1 jam
+     */
+    public function getPriceList(bool $forceRefresh = false): array
+    {
+        $cacheKey = 'digiflazz:pricelist';
+        
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        }
+
+        return Cache::remember($cacheKey, 3600, function () {
+            try {
+                $response = Http::timeout($this->timeout)
+                    ->post("{$this->baseUrl}/price-list", [
+                        'cmd' => 'prepaid',
+                        'username' => $this->username,
+                        'sign' => $this->generateSignature('pricelist'),
+                    ]);
+
+                if (!$response->successful()) {
+                    Log::error('Digiflazz pricelist failed', [
+                        'status' => $response->status()
+                    ]);
+                    return [];
+                }
+
+                $data = $response->json();
+
+                Log::info('Digiflazz pricelist fetched', [
+                    'total_products' => count($data['data'] ?? [])
+                ]);
+
+                return $data['data'] ?? [];
+
+            } catch (\Exception $e) {
+                Log::error('Digiflazz pricelist error', [
+                    'error' => $e->getMessage()
+                ]);
+                return [];
+            }
+        });
+    }
+
+    /**
+     * Get prepaid products
+     */
+    public function getPrepaidProducts(bool $forceRefresh = false): array
+    {
+        return $this->getPriceList($forceRefresh);
+    }
+
+    /**
+     * Get postpaid products
+     */
+    public function getPostpaidProducts(bool $forceRefresh = false): array
+    {
+        $cacheKey = 'digiflazz:postpaid';
+        
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        }
+
+        return Cache::remember($cacheKey, 3600, function () {
+            try {
+                $response = Http::timeout($this->timeout)
+                    ->post("{$this->baseUrl}/price-list", [
+                        'cmd' => 'pasca',
+                        'username' => $this->username,
+                        'sign' => $this->generateSignature('pricelist'),
+                    ]);
+
+                if (!$response->successful()) {
+                    return [];
+                }
+
+                $data = $response->json();
+                return $data['data'] ?? [];
+
+            } catch (\Exception $e) {
+                Log::error('Digiflazz postpaid error', [
+                    'error' => $e->getMessage()
+                ]);
+                return [];
+            }
+        });
+    }
+
+    /**
+     * Check transaction status
+     */
+    public function checkStatus(string $refId): array
+    {
+        try {
+            $response = Http::timeout($this->timeout)
+                ->post("{$this->baseUrl}/transaction", [
+                    'commands' => 'status-pasca',
+                    'username' => $this->username,
+                    'ref_id' => $refId,
+                    'sign' => $this->generateSignature($refId),
+                ]);
+
+            if (!$response->successful()) {
+                throw new \Exception('Status check failed: ' . $response->status());
+            }
+
+            return $response->json();
+
+        } catch (\Exception $e) {
+            Log::error('Digiflazz status check error', [
+                'ref_id' => $refId,
+                'error' => $e->getMessage()
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Generate signature untuk API authentication
+     * 
+     * @param string $refId Reference ID atau command
+     * @return string MD5 hash
+     */
+    private function generateSignature(string $refId): string
+    {
+        return md5($this->username . $this->apiKey . $refId);
+    }
+
+    /**
+     * Sync products dari Digiflazz ke database lokal
+     * Digunakan untuk scheduled command
+     */
+    public function syncProducts(): int
+    {
+        try {
+            $products = $this->getPriceList(true); // Force refresh
+            
+            if (empty($products)) {
+                Log::warning('Digiflazz sync: No products retrieved');
+                return 0;
+            }
+
+            $syncedCount = 0;
+            
+            foreach ($products as $product) {
+                \App\Models\Product::updateOrCreate(
+                    ['code' => $product['buyer_sku_code']],
+                    [
+                        'name' => $product['product_name'],
+                        'category' => $product['category'],
+                        'brand' => $product['brand'],
+                        'type' => $product['type'],
+                        'price' => $product['price'],
+                        'status' => $product['seller_product_status'] === true ? 'active' : 'inactive',
+                        'description' => $product['desc'] ?? null,
+                        'buyer_sku_code' => $product['buyer_sku_code'],
+                        'seller_name' => $product['seller_name'] ?? null,
+                        'unlimited_stock' => $product['unlimited_stock'] ?? true,
+                        'stock' => $product['stock'] ?? 0,
+                        'multi' => $product['multi'] ?? false,
+                        'start_cut_off' => $product['start_cut_off'] ?? null,
+                        'end_cut_off' => $product['end_cut_off'] ?? null,
+                    ]
                 );
+                $syncedCount++;
             }
 
-            return ['success' => true, 'data' => $data['data'] ?? $data];
+            Log::info('Digiflazz products synced', [
+                'total' => $syncedCount
+            ]);
 
-        } catch (Exception $e) {
-            Log::error('DigiflazzService::getBalance error', ['message' => $e->getMessage()]);
-            return ['success' => false, 'message' => $e->getMessage(), 'data' => null];
+            return $syncedCount;
+
+        } catch (\Exception $e) {
+            Log::error('Digiflazz sync failed', [
+                'error' => $e->getMessage()
+            ]);
+            throw $e;
         }
     }
 }

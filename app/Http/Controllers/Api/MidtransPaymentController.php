@@ -25,9 +25,14 @@ class MidtransPaymentController extends Controller
     ) {}
 
     /**
-     * POST /api/payments/midtrans/create
-     * Buat Snap Token untuk order yang sudah ada.
-     * Harga DIAMBIL dari database — tidak dari request.
+     * ┌─────────────────────────────────────────────────────────────┐
+     * │  CREATE PAYMENT                                             │
+     * │  POST /api/payments/midtrans/create                        │
+     * │                                                             │
+     * │  Buat Snap Token untuk order yang sudah ada.               │
+     * │  ⚠️  Harga DIAMBIL dari database — tidak dari request!     │
+     * │  ✅  Kalau snap token sudah ada, reuse — jangan buat baru. │
+     * └─────────────────────────────────────────────────────────────┘
      */
     public function createPayment(Request $request): JsonResponse
     {
@@ -46,6 +51,7 @@ class MidtransPaymentController extends Controller
         try {
             $order = Order::where('order_id', $request->order_id)->first();
 
+            // Cegah order yang sudah diproses/dibatalkan membuat token baru
             if ($order->status !== OrderStatus::PENDING) {
                 return response()->json([
                     'success' => false,
@@ -53,7 +59,7 @@ class MidtransPaymentController extends Controller
                 ], 400);
             }
 
-            // Reuse snap token yang sudah ada — cegah error duplikat dari Midtrans
+            // Reuse snap token yang sudah ada — cegah double token & error duplikat Midtrans
             if ($order->midtrans_snap_token) {
                 return response()->json([
                     'success' => true,
@@ -65,7 +71,7 @@ class MidtransPaymentController extends Controller
                 ], 200);
             }
 
-            // Ambil harga dari DB — integer untuk Midtrans
+            // Ambil harga dari DB sebagai integer (Midtrans tidak terima desimal)
             $product = Product::where('sku', $order->sku)->first();
             if (!$product) {
                 return response()->json(['success' => false, 'message' => 'Produk tidak ditemukan.'], 404);
@@ -100,59 +106,101 @@ class MidtransPaymentController extends Controller
     }
 
     /**
-     * POST /api/midtrans/webhook
-     * Menerima notifikasi pembayaran dari Midtrans.
+     * ┌─────────────────────────────────────────────────────────────┐
+     * │  HANDLE WEBHOOK                                             │
+     * │  POST /api/midtrans/webhook                                │
+     * │                                                             │
+     * │  Menerima notifikasi pembayaran dari Midtrans.             │
+     * │                                                             │
+     * │  ⚠️  BUG HISTORY:                                          │
+     * │  - Jangan pakai getNotification() / new Notification()!    │
+     * │    Laravel sudah consume php://input via $request->all()   │
+     * │    sehingga Notification() dapat data kosong.              │
+     * │  - Selalu pakai $notificationData (dari $request->all()).  │
+     * │                                                             │
+     * │  ⚠️  FIELD midtrans_* harus ada di $fillable di Order.php  │
+     * │    Kalau di $guarded, Eloquent update() diam-diam gagal.   │
+     * └─────────────────────────────────────────────────────────────┘
      */
     public function handleNotification(Request $request): JsonResponse
     {
         try {
+            // ✅ Ambil data dari request — JANGAN pakai getNotification()
             $notificationData = $request->all();
 
+            // Validasi signature untuk memastikan webhook benar-benar dari Midtrans
             if (!$this->midtransService->verifySignature($notificationData)) {
                 Log::warning('Midtrans webhook: signature tidak valid', ['ip' => $request->ip()]);
                 return response()->json(['success' => false, 'message' => 'Signature tidak valid.'], 401);
             }
 
-            $notification = $this->midtransService->getNotification();
-            $order        = Order::where('order_id', $notification->order_id)->first();
+            // Ekstrak semua field yang dibutuhkan dari payload webhook
+            $orderId           = $notificationData['order_id']           ?? null;
+            $transactionStatus = $notificationData['transaction_status'] ?? null;
+            $fraudStatus       = $notificationData['fraud_status']       ?? 'accept';
+            $paymentType       = $notificationData['payment_type']       ?? null;
+            $transactionId     = $notificationData['transaction_id']     ?? null;
+            $transactionTime   = $notificationData['transaction_time']   ?? null;
+
+            $order = Order::where('order_id', $orderId)->first();
 
             if (!$order) {
+                Log::warning('Midtrans webhook: order tidak ditemukan', ['order_id' => $orderId]);
                 return response()->json(['success' => false, 'message' => 'Order tidak ditemukan.'], 404);
             }
 
-            // Jika sudah final, abaikan webhook duplikat dari Midtrans
+            // Abaikan webhook duplikat dari Midtrans kalau status sudah final
             if ($order->status->isFinal()) {
                 return response()->json(['success' => true, 'message' => 'Status sudah final.'], 200);
             }
 
             DB::beginTransaction();
 
-            $order->update([
-                'midtrans_transaction_id'     => $notification->transaction_id,
-                'midtrans_payment_type'       => $notification->payment_type,
-                'midtrans_transaction_status' => $notification->transaction_status,
-                'midtrans_transaction_time'   => $notification->transaction_time,
-            ]);
+            // ✅ Untuk bank transfer, payment_type dari Midtrans = "bank_transfer" (generic)
+            // Kita perlu ambil nama bank spesifik dari va_numbers[0].bank
+            // Contoh: "bank_transfer" + bank "bni" → "bni_va"
+            // Ini yang ditampilkan ke user sebagai nama bank di frontend
+            if ($paymentType === 'bank_transfer' && isset($notificationData['va_numbers'][0])) {
+                $vaData = $notificationData['va_numbers'][0];
 
-            $transactionStatus = $notification->transaction_status;
-            $fraudStatus       = $notification->fraud_status ?? 'accept';
+                if (isset($vaData['bank'])) {
+                    $paymentType = $vaData['bank'] . '_va';  // bni → bni_va, bca → bca_va
+                }
+
+                // Simpan nomor VA sebagai transaction_id (bukan UUID dari Midtrans)
+                // Nomor VA inilah yang ditampilkan ke user untuk melakukan transfer
+                if (isset($vaData['va_number'])) {
+                    $transactionId = $vaData['va_number'];
+                }
+            }
+
+            $order->update([
+                'midtrans_transaction_id'     => $transactionId,     // Nomor VA atau transaction UUID
+                'midtrans_payment_type'       => $paymentType,       // bni_va, bca_va, gopay, dll
+                'midtrans_transaction_status' => $transactionStatus, // pending, settlement, expire, dll
+                'midtrans_transaction_time'   => $transactionTime,
+            ]);
 
             $shouldProcess = false;
 
+            // capture = kartu kredit berhasil, settlement = transfer/VA sudah masuk
             if (in_array($transactionStatus, ['capture', 'settlement'])) {
                 if ($fraudStatus === 'accept') {
                     $order->status = OrderStatus::PROCESSING;
                     $order->logStatusChange(OrderStatus::PROCESSING, 'Pembayaran sukses via Midtrans.');
                     $shouldProcess = true;
                 }
+            // deny/expire/cancel = pembayaran gagal atau kadaluarsa
             } elseif (in_array($transactionStatus, ['deny', 'expire', 'cancel'])) {
                 $order->status = OrderStatus::FAILED;
                 $order->logStatusChange(OrderStatus::FAILED, 'Pembayaran gagal/dibatalkan via Midtrans.');
             }
+            // pending = menunggu transfer (normal untuk VA), tidak perlu action
 
             $order->save();
             DB::commit();
 
+            // Kirim ke Digiflazz hanya kalau pembayaran benar-benar sukses
             if ($shouldProcess) {
                 $this->processToDigiflazz($order);
             }
@@ -166,19 +214,25 @@ class MidtransPaymentController extends Controller
         }
     }
 
-    // ─── Private: Kirim ke Digiflazz setelah pembayaran sukses ───────────────
-
     /**
-     * Fix BUG-02: menggunakan DB transaction + lockForUpdate
-     * untuk mencegah race condition double-processing.
+     * ┌─────────────────────────────────────────────────────────────┐
+     * │  PROCESS TO DIGIFLAZZ                                       │
+     * │  Dipanggil setelah pembayaran sukses (settlement/capture)  │
+     * │                                                             │
+     * │  ✅ Pakai lockForUpdate() untuk cegah race condition.      │
+     * │     Jika 2 webhook datang bersamaan, hanya 1 yang jalan.   │
+     * │  ✅ confirmed_at diset SEBELUM call API Digiflazz.         │
+     * │     Kalau gagal, confirmed_at di-reset dan status = FAILED. │
+     * └─────────────────────────────────────────────────────────────┘
      */
     private function processToDigiflazz(Order $order): void
     {
         try {
             DB::transaction(function () use ($order) {
-                // Re-lock untuk cegah race condition jika webhook duplikat datang hampir bersamaan
+                // Lock row untuk cegah double-processing dari webhook duplikat
                 $locked = Order::lockForUpdate()->find($order->id);
 
+                // Kalau confirmed_at sudah terisi, berarti sudah pernah dikirim — skip
                 if ($locked->confirmed_at !== null) {
                     Log::info('processToDigiflazz: order sudah pernah dikirim, skip.', [
                         'order_id' => $locked->order_id,
@@ -186,9 +240,10 @@ class MidtransPaymentController extends Controller
                     return;
                 }
 
-                // Tandai sudah dikonfirmasi sebelum memanggil API eksternal
+                // Tandai dulu sebelum call API eksternal — cegah race condition
                 $locked->update(['confirmed_at' => now()]);
 
+                // Untuk produk dengan zone (misal Mobile Legends), target = ID + zone
                 $target = $locked->target_number . ($locked->zone_id ?? '');
 
                 $digiflazzService = app(DigiflazzService::class);
@@ -215,7 +270,7 @@ class MidtransPaymentController extends Controller
         } catch (Exception $e) {
             Log::error('processToDigiflazz gagal: ' . $e->getMessage(), ['order_id' => $order->order_id]);
 
-            // Rollback confirmed_at dan tandai gagal
+            // Rollback: reset confirmed_at dan tandai order FAILED
             DB::transaction(function () use ($order, $e) {
                 $fresh = Order::lockForUpdate()->find($order->id);
                 if ($fresh && !$fresh->status->isFinal()) {
@@ -227,6 +282,7 @@ class MidtransPaymentController extends Controller
                 }
             });
 
+            // Kirim email notifikasi gagal ke customer
             try {
                 Mail::to($order->customer_email)->send(new OrderFailed($order, $e->getMessage()));
             } catch (Exception $mailEx) {

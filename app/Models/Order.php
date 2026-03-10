@@ -5,13 +5,12 @@ namespace App\Models;
 use App\Enums\OrderStatus;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\SoftDeletes;  // ← TAMBAH INI
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Order extends Model
 {
-    use HasFactory, SoftDeletes;  // ← TAMBAH SoftDeletes
+    use HasFactory, SoftDeletes;
 
-    // ✅ HANYA FIELD YANG AMAN BUAT USER
     protected $fillable = [
         'order_id',
         'sku',
@@ -20,11 +19,7 @@ class Order extends Model
         'zone_id',
         'customer_email',
         'total_price',
-    ];
-
-    // ✅ FIELD SENSITIF DIKUNCI (GAK BISA DIUBAH USER)
-    protected $guarded = [
-        'id',
+        // Internal fields — aman diupdate via backend/webhook
         'status',
         'sn',
         'payment_id',
@@ -37,12 +32,15 @@ class Order extends Model
         'midtrans_transaction_time',
     ];
 
+    // Hanya id yang benar-benar tidak boleh diubah
+    protected $guarded = ['id'];
+
     protected $casts = [
         'total_price'               => 'decimal:2',
         'status'                    => OrderStatus::class,
         'confirmed_at'              => 'datetime',
         'midtrans_transaction_time' => 'datetime',
-        'deleted_at'                => 'datetime',  // ← TAMBAH INI
+        'deleted_at'                => 'datetime',
     ];
 
     // ─── Relationships ────────────────────────────────────────────────────────
@@ -59,18 +57,12 @@ class Order extends Model
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
-    /**
-     * Tandai order sebagai GAGAL dan catat history.
-     */
     public function markAsFailed(?int $userId = null, ?string $reason = null): void
     {
         $this->update(['status' => OrderStatus::FAILED->value]);
         $this->logStatusChange(OrderStatus::FAILED, $reason ?? 'Order gagal diproses.', $userId);
     }
 
-    /**
-     * Catat perubahan status ke tabel history.
-     */
     public function logStatusChange(OrderStatus $status, ?string $note = null, ?int $userId = null): void
     {
         OrderStatusHistory::create([
