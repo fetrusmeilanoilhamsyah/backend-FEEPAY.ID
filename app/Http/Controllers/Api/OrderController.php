@@ -130,10 +130,14 @@ class OrderController extends Controller
                 $target = $order->target_number . $order->zone_id;
             }
 
-            $digiflazz = $this->digiflazzService->placeOrder($order->sku, $target, $order->order_id);
+            // purchaseProduct() return raw Digiflazz response
+            // Status: "Sukses" | "Pending" | "Gagal"
+            $digiflazz  = $this->digiflazzService->purchaseProduct($order->sku, $target, $order->order_id);
+            $digiStatus = $digiflazz['data']['status'] ?? null;
+            $digiMsg    = $digiflazz['data']['message'] ?? 'Transaksi Digiflazz gagal.';
 
-            if (!$digiflazz['success']) {
-                $order->markAsFailed($request->user()->id, 'Digiflazz: ' . $digiflazz['message']);
+            if ($digiStatus === 'Gagal') {
+                $order->markAsFailed($request->user()->id, 'Digiflazz: ' . $digiMsg);
                 DB::commit();
 
                 TelegramService::notify(
@@ -142,14 +146,14 @@ class OrderController extends Controller
                     "*Order ID:* #{$order->order_id}\n" .
                     "*Produk:* {$order->product_name}\n" .
                     "*Target:* {$target}\n" .
-                    "*Pesan:* {$digiflazz['message']}\n" .
+                    "*Pesan:* {$digiMsg}\n" .
                     "----------------------------------\n" .
                     "_Cek saldo Digiflazz!_"
                 );
 
                 return response()->json([
                     'success' => false,
-                    'message' => $digiflazz['message'],
+                    'message' => $digiMsg,
                 ], 400);
             }
 
@@ -216,14 +220,14 @@ class OrderController extends Controller
                 ], 200);
             }
 
-            $result = $this->digiflazzService->checkOrderStatus($order->order_id);
-
-            if (!$result['success']) {
-                return response()->json(['success' => false, 'message' => $result['message']], 400);
-            }
-
-            $apiData    = $result['data'];
+            // checkStatus() return raw Digiflazz response
+            $result     = $this->digiflazzService->checkStatus($order->order_id);
+            $apiData    = $result['data'] ?? [];
             $digiStatus = strtolower($apiData['status'] ?? '');
+
+            if (empty($digiStatus)) {
+                return response()->json(['success' => false, 'message' => 'Gagal mengambil status dari Digiflazz.'], 400);
+            }
 
             $newStatus = match($digiStatus) {
                 'sukses' => OrderStatus::SUCCESS,
@@ -256,7 +260,13 @@ class OrderController extends Controller
 
                 if ($newStatus === OrderStatus::SUCCESS) {
                     try {
-                        Mail::to($order->customer_email)->send(new OrderSuccess($order));
+                        $product = \App\Models\Product::where('sku', $order->sku)->first()
+                            ?? new \App\Models\Product([
+                                'name'          => $order->product_name,
+                                'sku'           => $order->sku,
+                                'selling_price' => $order->total_price,
+                            ]);
+                        Mail::to($order->customer_email)->send(new OrderSuccess($order, $product));
                     } catch (Exception $mailEx) {
                         Log::error('Email sukses gagal dikirim setelah sync', [
                             'order_id' => $order->order_id,
