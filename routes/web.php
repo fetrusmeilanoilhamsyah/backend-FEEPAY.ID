@@ -41,7 +41,7 @@ Route::get('/payment/finish', function () {
     $frontendUrl = config('app.frontend_url', env('FRONTEND_URL', 'https://feepay.web.id'));
 
     // Redirect ke frontend dengan order_id
-    return redirect("{$frontendUrl}/riwayat?order_id={$orderId}");
+    return redirect("{$frontendUrl}/riwayat?order_id={$orderId}&status=success");
 });
 
 // Halaman sukses (redirect dari checkout.blade.php setelah onSuccess)
