@@ -167,6 +167,8 @@ class ProductController extends Controller
             Log::error('ProductController::sync gagal', ['error' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => 'Gagal sinkronisasi: ' . $e->getMessage()], 500);
         }
+    }
+
     /**
      * POST /api/products/verify-game-id
      * Verifikasi ID Game (ML, FF, dll)
