@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\CallbackController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\SupportController;
+use App\Http\Controllers\Api\WAGatewayController;
 use App\Models\Order;
 
 /*
@@ -39,6 +40,21 @@ Route::middleware('throttle:5,1')->group(function () {
 Route::middleware('throttle:5,1')->group(function () {
     Route::post('/support/send', [SupportController::class, 'send']);
     Route::get('/support/contacts', [SupportController::class, 'getContacts']);
+});
+
+// Customer Auth: 20 per menit
+Route::middleware('throttle:20,1')->prefix('auth')->group(function () {
+    Route::post('/register', [\App\Http\Controllers\Api\CustomerAuthController::class, 'register']);
+    Route::post('/login', [\App\Http\Controllers\Api\CustomerAuthController::class, 'login']);
+    Route::post('/google', [\App\Http\Controllers\Api\CustomerAuthController::class, 'google']);
+    Route::post('/otp/request', [\App\Http\Controllers\Api\CustomerAuthController::class, 'otpRequest']);
+    Route::post('/otp/verify', [\App\Http\Controllers\Api\CustomerAuthController::class, 'otpVerify']);
+});
+
+// Protected Customer Auth
+Route::middleware(['auth:sanctum', 'throttle:60,1'])->prefix('auth')->group(function () {
+    Route::get('/me', [\App\Http\Controllers\Api\CustomerAuthController::class, 'me']);
+    Route::post('/logout', [\App\Http\Controllers\Api\CustomerAuthController::class, 'logout']);
 });
 
 // Order & Pembayaran: 20 per menit
@@ -130,5 +146,11 @@ Route::prefix("admin/{$adminPath}")
             Route::post('/sync', [ProductController::class, 'sync']);
             Route::post('/bulk-margin', [ProductController::class, 'bulkUpdateMargin']);
             Route::put('/{id}', [ProductController::class, 'update']);
+        });
+
+        // WA Gateway Management
+        Route::prefix('wa')->group(function () {
+            Route::get('/status', [WAGatewayController::class, 'status']);
+            Route::post('/disconnect', [WAGatewayController::class, 'disconnect']);
         });
     });
