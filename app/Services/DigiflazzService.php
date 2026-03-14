@@ -257,23 +257,25 @@ class DigiflazzService
             $syncedCount = 0;
             
             foreach ($products as $product) {
+                $costPrice = (float) ($product['price'] ?? 0);
+                $defaultMargin = (float) config('feepay.margin', 2000);
+                $sellingPrice = $costPrice + $defaultMargin;
+                $status = ($product['buyer_product_status'] ?? false) && ($product['seller_product_status'] ?? false) ? 'active' : 'inactive';
+
+                $existing = \App\Models\Product::where('sku', $product['buyer_sku_code'])->first();
+                if ($existing && $costPrice < $existing->selling_price) {
+                    $sellingPrice = $existing->selling_price;
+                }
+
                 \App\Models\Product::updateOrCreate(
-                    ['code' => $product['buyer_sku_code']],
+                    ['sku' => $product['buyer_sku_code']],
                     [
-                        'name' => $product['product_name'],
-                        'category' => $product['category'],
-                        'brand' => $product['brand'],
-                        'type' => $product['type'],
-                        'price' => $product['price'],
-                        'status' => $product['seller_product_status'] === true ? 'active' : 'inactive',
-                        'description' => $product['desc'] ?? null,
-                        'buyer_sku_code' => $product['buyer_sku_code'],
-                        'seller_name' => $product['seller_name'] ?? null,
-                        'unlimited_stock' => $product['unlimited_stock'] ?? true,
-                        'stock' => $product['stock'] ?? 0,
-                        'multi' => $product['multi'] ?? false,
-                        'start_cut_off' => $product['start_cut_off'] ?? null,
-                        'end_cut_off' => $product['end_cut_off'] ?? null,
+                        'name' => $product['product_name'] ?? 'Unknown',
+                        'category' => $product['category'] ?? 'General',
+                        'brand' => $product['brand'] ?? null,
+                        'cost_price' => $costPrice,
+                        'selling_price' => $sellingPrice,
+                        'status' => $status,
                     ]
                 );
                 $syncedCount++;

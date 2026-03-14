@@ -12,6 +12,8 @@ return Application::configure(basePath: dirname(__DIR__))
         health:   '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
+        // ─── Trust Proxies (Cloudflare/Load Balancer) untuk Security & IP Whitelist
+        $middleware->trustProxies(at: '*');
 
         // ─── Fix PROD-04: Middleware global yang sebelumnya di Kernel.php ────
         // Laravel 12 tidak pakai Kernel.php lagi — harus didaftarkan di sini.

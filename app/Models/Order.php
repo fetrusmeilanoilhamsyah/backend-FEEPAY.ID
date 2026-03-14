@@ -32,8 +32,7 @@ class Order extends Model
         'midtrans_transaction_time',
     ];
 
-    // Hanya id yang benar-benar tidak boleh diubah
-    protected $guarded = ['id'];
+    // ─── Fields ───────────────────────────────────────────────────────────────
 
     protected $casts = [
         'total_price'               => 'decimal:2',

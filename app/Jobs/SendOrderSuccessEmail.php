@@ -23,7 +23,8 @@ class SendOrderSuccessEmail implements ShouldQueue
     public array $backoff = [30, 180];
 
     public function __construct(
-        protected Order $order
+        protected Order $order,
+        protected Product $product
     ) {}
 
     public function handle(): void
@@ -31,7 +32,6 @@ class SendOrderSuccessEmail implements ShouldQueue
         // Sistem tanpa login — tidak ada relasi user
         // Email & data diambil langsung dari order
         $email       = $this->order->customer_email;
-        $productName = $this->order->product_name;
 
         if (empty($email)) {
             Log::error('SendOrderSuccessEmail: customer_email kosong', [
@@ -39,15 +39,6 @@ class SendOrderSuccessEmail implements ShouldQueue
             ]);
             return; // Jangan throw — tidak ada gunanya retry kalau email memang kosong
         }
-
-        // Ambil product untuk data tambahan di template email
-        // Kalau tidak ketemu, buat dummy dari data order agar email tetap terkirim
-        $product = Product::where('sku', $this->order->sku)->first()
-            ?? new Product([
-                'name'          => $productName,
-                'sku'           => $this->order->sku,
-                'selling_price' => $this->order->total_price,
-            ]);
 
         try {
             Mail::to($email)->send(new OrderSuccess($this->order, $product));
