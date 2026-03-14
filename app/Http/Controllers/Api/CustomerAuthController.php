@@ -287,11 +287,99 @@ class CustomerAuthController extends Controller
      */
     public function me(Request $request): JsonResponse
     {
-        $user = $request->user();
         return response()->json([
             'success' => true,
-            'data'    => $this->formatUserResponse($user, null)['user']
+            'data'    => $request->user(),
         ]);
+    }
+
+    /**
+     * PUT /api/auth/profile
+     */
+    public function updateProfile(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        
+        $request->validate([
+            'name'  => 'required|string|max:255',
+            'phone' => 'nullable|string|max:20|unique:users,phone,' . $user->id,
+            'email' => $user->google_id ? 'nullable' : 'required|string|email|max:255|unique:users,email,' . $user->id,
+        ]);
+
+        try {
+            $user->update([
+                'name'  => $request->name,
+                'phone' => $request->phone,
+                'email' => $user->google_id ? $user->email : $request->email,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Profil berhasil diperbarui.',
+                'data'    => $user,
+            ]);
+        } catch (Exception $e) {
+            Log::error('updateProfile error', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Gagal memperbarui profil.'], 500);
+        }
+    }
+
+    /**
+     * PUT /api/auth/change-password
+     */
+    public function changePassword(Request $request): JsonResponse
+    {
+        $request->validate([
+            'old_password' => 'required|string',
+            'new_password' => 'required|string|min:8|confirmed',
+        ]);
+
+        $user = $request->user();
+
+        if (!Hash::check($request->old_password, $user->password)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Password lama tidak sesuai.',
+            ], 422);
+        }
+
+        try {
+            $user->update([
+                'password' => Hash::make($request->new_password),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Password berhasil diubah.',
+            ]);
+        } catch (Exception $e) {
+            Log::error('changePassword error', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Gagal mengubah password.'], 500);
+        }
+    }
+
+    /**
+     * DELETE /api/auth/account
+     */
+    public function deleteAccount(Request $request): JsonResponse
+    {
+        try {
+            $user = $request->user();
+            
+            // Delete tokens
+            $user->tokens()->delete();
+            
+            // Soft delete user
+            $user->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Akun berhasil dihapus.',
+            ]);
+        } catch (Exception $e) {
+            Log::error('deleteAccount error', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Gagal menghapus akun.'], 500);
+        }
     }
 
     /**

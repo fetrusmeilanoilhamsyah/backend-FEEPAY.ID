@@ -55,6 +55,15 @@ Route::middleware('throttle:20,1')->prefix('auth')->group(function () {
 Route::middleware(['auth:sanctum', 'throttle:60,1'])->prefix('auth')->group(function () {
     Route::get('/me', [\App\Http\Controllers\Api\CustomerAuthController::class, 'me']);
     Route::post('/logout', [\App\Http\Controllers\Api\CustomerAuthController::class, 'logout']);
+    Route::put('/profile', [\App\Http\Controllers\Api\CustomerAuthController::class, 'updateProfile']);
+    Route::put('/change-password', [\App\Http\Controllers\Api\CustomerAuthController::class, 'changePassword']);
+    Route::delete('/account', [\App\Http\Controllers\Api\CustomerAuthController::class, 'deleteAccount']);
+});
+
+// Customer Orders (requires login)
+Route::middleware(['auth:sanctum', 'throttle:60,1'])->prefix('customer')->group(function () {
+    Route::get('/orders', [\App\Http\Controllers\Api\CustomerOrderController::class, 'index']);
+    Route::post('/orders/claim', [\App\Http\Controllers\Api\CustomerOrderController::class, 'claimOrders']);
 });
 
 // Order & Pembayaran: 20 per menit

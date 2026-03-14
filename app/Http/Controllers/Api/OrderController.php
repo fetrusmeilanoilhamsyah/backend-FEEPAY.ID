@@ -60,6 +60,7 @@ class OrderController extends Controller
             $orderId = 'FP' . strtoupper(Str::random(12));
 
             $order = Order::create([
+                'user_id'        => optional($request->user())->id, // null untuk guest
                 'order_id'       => $orderId,
                 'sku'            => $request->sku,
                 'product_name'   => $product->name,
