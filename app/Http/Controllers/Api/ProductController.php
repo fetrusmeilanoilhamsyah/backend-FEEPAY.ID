@@ -167,5 +167,48 @@ class ProductController extends Controller
             Log::error('ProductController::sync gagal', ['error' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => 'Gagal sinkronisasi: ' . $e->getMessage()], 500);
         }
+    /**
+     * POST /api/products/verify-game-id
+     * Verifikasi ID Game (ML, FF, dll)
+     */
+    public function verifyGameId(Request $request): JsonResponse
+    {
+        $request->validate([
+            'game'    => 'required|string',
+            'user_id' => 'required|string',
+            'zone_id' => 'nullable|string',
+        ]);
+
+        try {
+            $game   = strtoupper($request->game);
+            $userId = $request->user_id;
+            $zoneId = $request->zone_id;
+
+            // Simulasi verifikasi atau gunakan API pihak ketiga jika ada
+            // Untuk demo/MVP, kita kembalikan sukses jika ID > 5 digit
+            if (strlen($userId) < 5) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'ID tidak ditemukan atau terlalu pendek.'
+                ], 404);
+            }
+
+            // Mock name generation based on ID
+            $mockNames = ['SkyWatcher', 'ProPlayer', 'FeePayUser', 'Legendary', 'ShadowHunter'];
+            $nameIdx   = (int) substr($userId, -1) % count($mockNames);
+            $username  = $mockNames[$nameIdx];
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'username' => $username,
+                    'game'     => $game,
+                    'id'       => $userId . ($zoneId ? " ($zoneId)" : '')
+                ]
+            ]);
+
+        } catch (Exception $e) {
+            return response()->json(['success' => false, 'message' => 'Gagal verifikasi ID.'], 500);
+        }
     }
 }

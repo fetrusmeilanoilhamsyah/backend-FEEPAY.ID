@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\SupportController;
 use App\Http\Controllers\Api\WAGatewayController;
+use App\Http\Controllers\Api\UserController;
 use App\Models\Order;
 
 /*
@@ -81,6 +82,7 @@ Route::middleware('throttle:100,1')->group(function () {
 // Read-only publik: 60 per menit
 Route::middleware('throttle:60,1')->group(function () {
     Route::get('/products', [ProductController::class, 'index']);
+    Route::post('/products/verify-game-id', [ProductController::class, 'verifyGameId']);
 
     // POST dipakai karena email pelanggan dikirim sebagai body untuk verifikasi kepemilikan
     Route::post('/orders/{orderId}', [OrderController::class, 'show']);
@@ -148,6 +150,11 @@ Route::prefix("admin/{$adminPath}")
             Route::get('/', [OrderController::class, 'index']);
             Route::post('/{id}/confirm', [OrderController::class, 'confirm']);
             Route::post('/{orderId}/sync', [OrderController::class, 'sync']);
+        });
+
+        // Manajemen Pengguna
+        Route::prefix('users')->group(function () {
+            Route::get('/', [UserController::class, 'index']);
         });
 
         // Manajemen Produk

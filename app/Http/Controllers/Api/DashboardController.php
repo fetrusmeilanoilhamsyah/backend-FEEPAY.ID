@@ -58,6 +58,7 @@ class DashboardController extends Controller
                         'failed_orders'  => $failedOrders,
                         'total_revenue'  => (float) $totalRevenue,
                         'total_products' => Product::count(),
+                        'total_users'    => \App\Models\User::count(),
                     ],
                     'recent_orders' => $recentOrders,
                     'daily_revenue' => $dailyRevenue,
