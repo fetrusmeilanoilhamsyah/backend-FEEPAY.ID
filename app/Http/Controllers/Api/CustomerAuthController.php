@@ -16,20 +16,6 @@ use Google_Client;
 class CustomerAuthController extends Controller
 {
     /**
-     * TEMPORARY: POST /api/auth/fix-db
-     */
-    public function fixDb(): JsonResponse
-    {
-        try {
-            \Illuminate\Support\Facades\DB::statement("ALTER TABLE users MODIFY COLUMN role ENUM('admin', 'user') NOT NULL DEFAULT 'user'");
-            \Illuminate\Support\Facades\DB::statement("ALTER TABLE users MODIFY COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1");
-            return response()->json(['success' => true, 'message' => 'Database fixed!']);
-        } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
-        }
-    }
-
-    /**
      * POST /api/auth/register
      */
     public function register(Request $request): JsonResponse

@@ -49,7 +49,6 @@ Route::middleware('throttle:20,1')->prefix('auth')->group(function () {
     Route::post('/google', [\App\Http\Controllers\Api\CustomerAuthController::class, 'google']);
     Route::post('/otp/request', [\App\Http\Controllers\Api\CustomerAuthController::class, 'otpRequest']);
     Route::post('/otp/verify', [\App\Http\Controllers\Api\CustomerAuthController::class, 'otpVerify']);
-    Route::get('/fix-db', [\App\Http\Controllers\Api\CustomerAuthController::class, 'fixDb']);
 });
 
 // Protected Customer Auth
