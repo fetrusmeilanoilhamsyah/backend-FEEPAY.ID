@@ -28,4 +28,8 @@ return [
         'redirect' => env('GOOGLE_REDIRECT_URI'),
     ],
 
+    'wa_gateway' => [
+        'url' => env('WA_GATEWAY_URL'),
+    ],
+
 ];

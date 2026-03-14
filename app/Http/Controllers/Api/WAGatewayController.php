@@ -13,7 +13,7 @@ class WAGatewayController extends Controller
 
     public function __construct()
     {
-        $this->gatewayUrl = rtrim(env('WA_GATEWAY_URL', 'http://localhost:3001/api/send'), '/send');
+        $this->gatewayUrl = rtrim(config('services.wa_gateway.url', 'http://localhost:3001/api/send'), '/send');
     }
 
     /**

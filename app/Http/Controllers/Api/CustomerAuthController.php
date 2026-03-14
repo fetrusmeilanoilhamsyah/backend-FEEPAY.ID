@@ -193,8 +193,7 @@ class CustomerAuthController extends Controller
             Cache::put($cacheKey, $otp, now()->addMinutes(5));
 
             // Jika WA Gateway di-setup, tembak API-nya
-            $waGatewayUrl = env('WA_GATEWAY_URL') ?: config('services.wa_gateway.url');
-            Log::info("DEBUG: WA_GATEWAY_URL is " . ($waGatewayUrl ?: 'EMPTY'));
+            $waGatewayUrl = config('services.wa_gateway.url');
 
             if ($waGatewayUrl) {
                 try {
@@ -206,7 +205,7 @@ class CustomerAuthController extends Controller
                     if ($response->successful()) {
                         Log::info("OTP dikirim ke {$request->phone} via Gateway. Response: " . $response->body());
                     } else {
-                        Log::error("Gateway merespon dengen error: " . $response->status() . " - " . $response->body());
+                        Log::error("Gateway merespon dengan error: " . $response->status() . " - " . $response->body());
                     }
                 } catch (\Exception $e) {
                     Log::error("Gagal mengirim OTP ke Gateway (Exception): " . $e->getMessage());
