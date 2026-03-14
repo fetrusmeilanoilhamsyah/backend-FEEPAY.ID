@@ -193,17 +193,23 @@ class CustomerAuthController extends Controller
             Cache::put($cacheKey, $otp, now()->addMinutes(5));
 
             // Jika WA Gateway di-setup, tembak API-nya
-            $waGatewayUrl = env('WA_GATEWAY_URL');
+            $waGatewayUrl = env('WA_GATEWAY_URL') ?: config('services.wa_gateway.url');
+            Log::info("DEBUG: WA_GATEWAY_URL is " . ($waGatewayUrl ?: 'EMPTY'));
+
             if ($waGatewayUrl) {
                 try {
-                    \Illuminate\Support\Facades\Http::timeout(10)->post($waGatewayUrl, [
+                    $response = \Illuminate\Support\Facades\Http::timeout(10)->post($waGatewayUrl, [
                         'target'  => $request->phone,
                         'message' => "Kode OTP Rahasia FEEPAY Anda: *$otp*\n\n_Hati-hati, jangan berikan kode ini ke orang lain, termasuk pihak FEEPAY._"
                     ]);
-                    Log::info("OTP dikirim ke {$request->phone} via Gateway");
+                    
+                    if ($response->successful()) {
+                        Log::info("OTP dikirim ke {$request->phone} via Gateway. Response: " . $response->body());
+                    } else {
+                        Log::error("Gateway merespon dengen error: " . $response->status() . " - " . $response->body());
+                    }
                 } catch (\Exception $e) {
-                    Log::error("Gagal mengirim OTP ke Gateway: " . $e->getMessage());
-                    // Jangan kembalikan error, biar user setidaknya tahu OTP gagal dikirim (opsional: atau throw exception)
+                    Log::error("Gagal mengirim OTP ke Gateway (Exception): " . $e->getMessage());
                 }
             } else {
                  Log::info("OTP generated for {$request->phone}: {$otp} (Mode Simulasi - WA Gateway Belum Dikonfigurasi)");
