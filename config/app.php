@@ -61,6 +61,14 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Admin IP Check Toggle
+    |--------------------------------------------------------------------------
+    | Jika false, pengecekan IP whitelist akan di-skip (tetap aman dengan PIN).
+    */
+    'admin_ip_check' => env('ADMIN_IP_CHECK', true),
+
+    /*
+    |--------------------------------------------------------------------------
     | Admin Email
     |--------------------------------------------------------------------------
     | Fix PROD-03: Email akun admin yang dibuat seeder.

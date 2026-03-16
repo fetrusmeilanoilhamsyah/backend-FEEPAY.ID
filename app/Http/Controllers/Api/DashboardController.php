@@ -83,13 +83,12 @@ class DashboardController extends Controller
         try {
             $result = $this->digiflazzService->getBalance();
 
-            if (!$result['success']) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Gagal ambil saldo: ' . ($result['message'] ?? 'Unknown error'),
-                ], 400);
-            }
-
+            if (empty($result['data']['deposit']) && ($result['data']['deposit'] ?? null) !== 0) {
+    return response()->json([
+        'success' => false,
+        'message' => 'Gagal ambil saldo dari Digiflazz.',
+    ], 400);
+}
             $balance = $result['data']['deposit'] ?? 0;
             $isLow   = $balance < 50000;
 

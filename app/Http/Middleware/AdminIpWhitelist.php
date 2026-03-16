@@ -11,6 +11,11 @@ class AdminIpWhitelist
 {
     public function handle(Request $request, Closure $next): Response
     {
+        // Tambahan: Lewati cek IP jika fitur dinonaktifkan di config
+        if (!config('app.admin_ip_check', true)) {
+            return $next($request);
+        }
+
         $allowedIps = array_filter(
             array_map('trim', explode(',', config('app.admin_allowed_ips', '')))
         );
