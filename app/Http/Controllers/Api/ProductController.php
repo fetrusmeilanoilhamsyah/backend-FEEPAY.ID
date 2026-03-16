@@ -111,17 +111,25 @@ class ProductController extends Controller
     {
         try {
             $category = $request->query('category');
-            $response = $this->digiflazzService->getPriceList($category);
+            
+            // DigiflazzService::getPriceList returns the product array directly
+            $productsData = $this->digiflazzService->getPriceList(true);
 
-            if (!$response['success']) {
-                return response()->json(['success' => false, 'message' => $response['message']], 400);
+            if (empty($productsData)) {
+                return response()->json(['success' => false, 'message' => 'Gagal mengambil data dari Digiflazz.'], 400);
             }
 
             $defaultMargin = (float) config('feepay.margin', 2000);
             $syncedCount   = 0;
 
-            DB::transaction(function () use ($response, $defaultMargin, &$syncedCount) {
-                foreach ($response['data'] as $item) {
+            DB::transaction(function () use ($productsData, $category, $defaultMargin, &$syncedCount) {
+                foreach ($productsData as $item) {
+                    $itemCategory = $item['category'] ?? 'General';
+                    
+                    // Filter by category if requested
+                    if ($category && stripos($itemCategory, $category) === false) {
+                        continue;
+                    }
                     $sku = $item['buyer_sku_code'] ?? null;
                     if (!$sku) continue;
 
