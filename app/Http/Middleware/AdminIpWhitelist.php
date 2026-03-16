@@ -12,7 +12,8 @@ class AdminIpWhitelist
     public function handle(Request $request, Closure $next): Response
     {
         // Tambahan: Lewati cek IP jika fitur dinonaktifkan di config
-        if (!config('app.admin_ip_check', true)) {
+        $ipCheckEnabled = config('app.admin_ip_check', true);
+        if ($ipCheckEnabled === false || $ipCheckEnabled === 'false') {
             return $next($request);
         }
 
