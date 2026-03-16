@@ -13,7 +13,9 @@ class AdminIpWhitelist
     {
         // Tambahan: Lewati cek IP jika fitur dinonaktifkan di config
         $ipCheckEnabled = config('app.admin_ip_check', true);
-        if ($ipCheckEnabled === false || $ipCheckEnabled === 'false') {
+        $allowedIpsRaw  = config('app.admin_allowed_ips', '');
+
+        if ($ipCheckEnabled === false || $ipCheckEnabled === 'false' || $allowedIpsRaw === 'false') {
             return $next($request);
         }
 
